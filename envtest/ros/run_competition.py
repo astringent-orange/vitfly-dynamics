@@ -362,7 +362,7 @@ class AgilePilotNode:
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 5 == 0:
-            self.data_log.to_csv(self.folder + "/data.csv")
+            self.data_log.to_csv(self.folder + "/data.csv", index=False)
 
     def state_callback(self, state_data):
         self.state = AgileQuadState(state_data)
@@ -459,7 +459,7 @@ class AgilePilotNode:
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 2 == 0 and self.count != 0 or abs(self.state.pos[0] - 20) < 1:
-            self.data_log.to_csv(self.folder + "/data.csv")
+            self.data_log.to_csv(self.folder + "/data.csv", index=False)
 
     def if_collide(self, obs):
         """

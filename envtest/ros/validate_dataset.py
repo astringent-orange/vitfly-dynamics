@@ -1,12 +1,12 @@
 #!/usr/bin/python3
 import argparse
+import csv
 import glob
 import os
 import sys
 
 import cv2
 import numpy as np
-import pandas as pd
 
 
 REQUIRED_COLUMNS = [
@@ -35,30 +35,46 @@ REQUIRED_COLUMNS = [
 def validate_trajectory(path):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
-        return [f"{path}: missing data.csv"], 0
+        return [f"{path}: missing data.csv"], 0, 0
 
     errors = []
-    data = pd.read_csv(csv_path)
+    with open(csv_path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    fieldnames = rows[0].keys() if rows else []
     depth_pngs = sorted(p for p in glob.glob(os.path.join(path, "*.png")) if not p.endswith("_rgb.png"))
     rgb_pngs = sorted(glob.glob(os.path.join(path, "*_rgb.png")))
 
-    missing = [col for col in REQUIRED_COLUMNS if col not in data.columns]
+    missing = [col for col in REQUIRED_COLUMNS if col not in fieldnames]
     if missing:
         errors.append(f"{path}: missing columns {missing}")
     if rgb_pngs:
         errors.append(f"{path}: found RGB debug PNGs in trajectory root")
-    if len(depth_pngs) != len(data):
-        errors.append(f"{path}: png count {len(depth_pngs)} != csv rows {len(data)}")
+    if len(depth_pngs) != len(rows):
+        errors.append(f"{path}: png count {len(depth_pngs)} != csv rows {len(rows)}")
     if len(depth_pngs) > 0:
         sample = cv2.imread(depth_pngs[0], cv2.IMREAD_UNCHANGED)
         if sample is None or sample.size == 0 or not np.isfinite(sample).all() or sample.max() <= 0:
             errors.append(f"{path}: invalid depth PNG sample")
-    if {"velcmd_x", "velcmd_y", "velcmd_z"}.issubset(data.columns):
-        if not np.isfinite(data[["velcmd_x", "velcmd_y", "velcmd_z"]].to_numpy()).all():
+    if {"velcmd_x", "velcmd_y", "velcmd_z"}.issubset(fieldnames):
+        try:
+            vel_values = np.array(
+                [[float(row["velcmd_x"]), float(row["velcmd_y"]), float(row["velcmd_z"])] for row in rows],
+                dtype=float,
+            )
+        except ValueError:
             errors.append(f"{path}: non-finite velocity command")
-    if "astar_success" in data.columns and data["astar_success"].sum() == 0:
+        else:
+            if not np.isfinite(vel_values).all():
+                errors.append(f"{path}: non-finite velocity command")
+    astar_success = 0
+    if "astar_success" in fieldnames:
+        astar_success = sum(int(float(row["astar_success"])) for row in rows if row.get("astar_success", "") != "")
+    if "astar_success" in fieldnames and astar_success == 0:
         errors.append(f"{path}: no successful A* samples")
-    return errors, len(data)
+    avoidance_rows = 0
+    if "avoidance_active" in fieldnames:
+        avoidance_rows = sum(int(float(row["avoidance_active"])) for row in rows if row.get("avoidance_active", "") != "")
+    return errors, len(rows), avoidance_rows
 
 
 def main():
@@ -75,14 +91,10 @@ def main():
     rows = 0
     avoidance_rows = 0
     for folder in folders:
-        errors, count = validate_trajectory(folder)
+        errors, count, avoidance_count = validate_trajectory(folder)
         all_errors.extend(errors)
         rows += count
-        csv_path = os.path.join(folder, "data.csv")
-        if os.path.exists(csv_path):
-            data = pd.read_csv(csv_path)
-            if "avoidance_active" in data.columns:
-                avoidance_rows += int(data["avoidance_active"].sum())
+        avoidance_rows += avoidance_count
 
     if all_errors:
         print("[VALIDATE_DATASET] Failed:")

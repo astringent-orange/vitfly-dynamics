@@ -12,6 +12,7 @@ echo $2
 
 state_human=0
 random_env=0
+fixed_env=0
 force_rviz=0
 env_count="${VITFLY_ENV_COUNT:-10}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
@@ -24,6 +25,9 @@ do
   elif [ "$arg" = "random_env" ]
   then
     random_env=1
+  elif [ "$arg" = "fixed_env" ]
+  then
+    fixed_env=1
   elif [ "$arg" = "rviz" ] || [ "$arg" = "debug" ]
   then
     force_rviz=1
@@ -59,6 +63,10 @@ then
   else
     run_competition_args=""
     realtimefactor="real_time_factor:=10.0"
+    if ((!fixed_env))
+    then
+      random_env=1
+    fi
   fi
 else
   echo

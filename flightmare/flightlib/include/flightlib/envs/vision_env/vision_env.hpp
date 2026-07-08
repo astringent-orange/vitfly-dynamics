@@ -115,6 +115,7 @@ class VisionEnv final : public EnvBase {
   bool _move_obst_trigger = 0;
   bool _datagen = 0;
   bool _rollout = 0;
+  bool _dynamic_obstacles_motion = 0;
 
   /******************************/
 

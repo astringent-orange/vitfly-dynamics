@@ -50,10 +50,10 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
   vision_env_ptr_ = std::make_unique<flightlib::VisionEnv>(env_cfg_file, 0);
   if (render_) {
     std::string camera_config = ros_param_directory_ + "/camera_config.yaml";
-    if (!(std::filesystem::exists(camera_config))) {
-      ROS_ERROR("Configuration file [%s] does not exists.",
-                camera_config.c_str());
-    }
+    // if (!(std::filesystem::exists(camera_config))) {
+    //   ROS_ERROR("Configuration file [%s] does not exists.",
+    //             camera_config.c_str());
+    // }
     YAML::Node cfg_node = YAML::LoadFile(camera_config);
     vision_env_ptr_->configCamera(cfg_node);
     vision_env_ptr_->setUnity(render_);
@@ -150,7 +150,8 @@ void VisionSim::simLoop() {
      * Plan is simple -> if datagen, we won't simulate dynamic obstacle trajectories
      * We will make a piecewise function for the dynamic obstacle at each reset
     */
-    if(!vision_env_ptr_->_move_obst_trigger)
+    if(vision_env_ptr_->_dynamic_obstacles_motion ||
+       !vision_env_ptr_->_move_obst_trigger)
     {
       for (int i = 0; i < int(dynamic_objects.size()); i++) {
         dynamic_objects[i]->run(sim_dt_);

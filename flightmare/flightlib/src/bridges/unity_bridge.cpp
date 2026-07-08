@@ -1,6 +1,6 @@
 #include "flightlib/bridges/unity_bridge.hpp"
 
-#include <filesystem>
+// #include <filesystem>
 
 namespace flightlib {
 
@@ -153,10 +153,10 @@ void UnityBridge::setRenderOffset(const Ref<Vector<3>> render_offset) {
 }
 
 bool UnityBridge::setObjectCSV(const std::string& csv_file) {
-  if (!(file_exists(csv_file))) {
-    logger_.error("Configuration file %s does not exists.", csv_file);
-    return false;
-  }
+  // if (!(file_exists(csv_file))) {
+  //   logger_.error("Configuration file %s does not exists.", csv_file);
+  //   return false;
+  // }
   // logger_.info("Scene ID is set to %d.", scene_id);
   settings_.object_csv = csv_file;
   return true;
@@ -342,18 +342,18 @@ bool UnityBridge::getPointCloud(PointCloudMessage_t& pointcloud_msg,
 
   logger_.info("Generate PointCloud: Timeout= %d seconds", (int)time_out);
 
-  Scalar run_time = 0.0;
-  while (!std::filesystem::exists(pointcloud_msg.path +
-                                  pointcloud_msg.file_name + ".ply")) {
-    if (run_time >= time_out) {
-      logger_.warn("Timeout... PointCloud was not saved within expected time.");
-      return false;
-    }
-    logger_.info("Waiting for Pointcloud: Current Runtime= %d seconds",
-                 (int)run_time);
-    usleep((time_out / 10.0) * 1e6);
-    run_time += time_out / 10.0;
-  }
+  // Scalar run_time = 0.0;
+  // while (!std::filesystem::exists(pointcloud_msg.path +
+  //                                 pointcloud_msg.file_name + ".ply")) {
+  //   if (run_time >= time_out) {
+  //     logger_.warn("Timeout... PointCloud was not saved within expected time.");
+  //     return false;
+  //   }
+  //   logger_.info("Waiting for Pointcloud: Current Runtime= %d seconds",
+  //                (int)run_time);
+  //   usleep((time_out / 10.0) * 1e6);
+  //   run_time += time_out / 10.0;
+  // }
   return true;
 }
 

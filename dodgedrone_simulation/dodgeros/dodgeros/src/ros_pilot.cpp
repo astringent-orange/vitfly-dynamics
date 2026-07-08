@@ -38,7 +38,7 @@ static inline PilotParams loadParams(const ros::NodeHandle& nh) {
            ros_param_dir.c_str());
 
   return PilotParams(fs::path(ros_param_dir) / fs::path(pilot_config),
-                     agi_param_dir, fs::path(ros_param_dir) / "quads" / "");
+                     agi_param_dir, fs::path(ros_param_dir) / "quads" / "kingfisher.yaml");
 }
 
 RosPilot::RosPilot(const ros::NodeHandle& nh, const ros::NodeHandle& pnh)

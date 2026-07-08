@@ -10,9 +10,9 @@ VisionEnv::VisionEnv()
 VisionEnv::VisionEnv(const std::string &cfg_path, const int env_id)
   : EnvBase() {
   // check if configuration file exist
-  if (!(file_exists(cfg_path))) {
-    logger_.error("[VisionEnv] Configuration file %s does not exists.", cfg_path);
-  }
+  // if (!(file_exists(cfg_path))) {
+  //   logger_.error("[VisionEnv] Configuration file %s does not exists.", cfg_path);
+  // }
   // load configuration file
   cfg_ = YAML::LoadFile(cfg_path);
   //
@@ -350,11 +350,11 @@ bool VisionEnv::changeObsLoc(void){
 
 bool VisionEnv::readTrainingObs(std::string &csv_file, int obsNo) {
   //
-  if (!(file_exists(csv_file))) {
-    logger_.info(csv_file);
-    logger_.warn("[readTrainingObs] Configuration file %s does not exists.", csv_file);
-    return false;
-  }
+  // if (!(file_exists(csv_file))) {
+  //   logger_.info(csv_file);
+  //   logger_.warn("[readTrainingObs] Configuration file %s does not exists.", csv_file);
+  //   return false;
+  // }
   // logger_.info("Changing Position!");
   // logger_.info(std::to_string(_numRun));
   std::ifstream infile(csv_file);
@@ -576,20 +576,25 @@ bool VisionEnv::loadParam(const YAML::Node &cfg) {
   //[KR_AGILE] Modifications by Dhruv 17th April
   _datagen = cfg["datagen"].as<int>() != 0;
   _rollout = cfg["rollout"].as<int>() != 0;
-  _move_obst_trigger = _datagen || _rollout;
+  _dynamic_obstacles_motion = false;
+  if (cfg["dynamic_obstacles_motion"]) {
+    _dynamic_obstacles_motion = cfg["dynamic_obstacles_motion"].as<bool>();
+  }
+  _move_obst_trigger = (_datagen || _rollout) && !_dynamic_obstacles_motion;
 
   logger_.info("Datagen: %d",_datagen);
   logger_.info("Rollout: %d",_rollout);
   logger_.info("Move Obstacle Trigger: %d",_move_obst_trigger);
+  logger_.info("Dynamic Obstacles Motion: %d",_dynamic_obstacles_motion);
 
   //
   std::string scene_file =
     getenv("FLIGHTMARE_PATH") + std::string("/flightpy/configs/scene.yaml");
   // check if configuration file exist
-  if (!(file_exists(scene_file))) {
-    logger_.error("Unity scene configuration file %s does not exists.",
-                  scene_file);
-  }
+  // if (!(file_exists(scene_file))) {
+  //   logger_.error("Unity scene configuration file %s does not exists.",
+  //                 scene_file);
+  // }
   // load configuration file
   YAML::Node scene_cfg_node = YAML::LoadFile(scene_file);
   std::string scene_idx = "scene_" + std::to_string(scene_id_);
@@ -605,10 +610,10 @@ bool VisionEnv::configDynamicObjects(const std::string &yaml_file) {
 
   logger_.info("Configuring dynamic objects from: %s", yaml_file.c_str());
 
-  if (!(file_exists(yaml_file))) {
-    logger_.error("[configDynamicObjects] Dynamic objects YAML file %s does not exist.", yaml_file);
-    return false;
-  }
+  // if (!(file_exists(yaml_file))) {
+  //   logger_.error("[configDynamicObjects] Dynamic objects YAML file %s does not exist.", yaml_file);
+  //   return false;
+  // }
   YAML::Node cfg_node = YAML::LoadFile(yaml_file);
 
   // logger_.info("Configuring dynamic objects");
@@ -630,6 +635,9 @@ bool VisionEnv::configDynamicObjects(const std::string &yaml_file) {
 
     obj->setPosition(Vector<3>(posvec.data()));
     obj->setRotation(Quaternion(rotvec.data()));
+    if (cfg_node[object_id]["loop"]) {
+      obj->setLoop(cfg_node[object_id]["loop"].as<bool>());
+    }
     // actual size in meters
     obj->setSize(Vector<3>(1.0, 1.0, 1.0));
     // scale of the original size
@@ -638,10 +646,10 @@ bool VisionEnv::configDynamicObjects(const std::string &yaml_file) {
     std::string csv_name = cfg_node[object_id]["csvtraj"].as<std::string>();
     std::string csv_file = obstacle_cfg_path_ + std::string("/csvtrajs/") +
                            csv_name + std::string(".csv");
-    if (!(file_exists(csv_file))) {
-      logger_.error("[configDynamicObjects] CSV file %s does not exist.", csv_file);
-      return false;
-    }
+    // if (!(file_exists(csv_file))) {
+    //   logger_.error("[configDynamicObjects] CSV file %s does not exist.", csv_file);
+    //   return false;
+    // }
     obj->loadTrajectory(csv_file);
 
     dynamic_objects_.push_back(obj);
@@ -655,10 +663,10 @@ bool VisionEnv::configStaticObjects(const std::string &csv_file) {
 
   logger_.info("Configuring static objects from: %s", csv_file.c_str());
 
-  if (!(file_exists(csv_file))) {
-    logger_.error("[configStaticObjects] CSV file %s does not exists.", csv_file);
-    return false;
-  }
+  // if (!(file_exists(csv_file))) {
+  //   logger_.error("[configStaticObjects] CSV file %s does not exists.", csv_file);
+  //   return false;
+  // }
   std::ifstream infile(csv_file);
   int i = 0;
   for (auto &row : CSVRange(infile)) {

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 
 project(flightlib VERSION 0.1.0)
 
@@ -13,7 +13,7 @@ option(BUILD_BENCH "Building the benchmark." OFF)
 option(ENABLE_FAST "Build with optimizations for speed" ON)
 option(ENABLE_BLAS "Build using BLAS and LAPACK libraries" OFF)
 option(ENABLE_PARALLEL "Build using openmp parallelization" ON)
-option(EIGEN_FROM_SYSTEM "Use the system-provided Eigen" OFF)
+option(EIGEN_FROM_SYSTEM "Use the system-provided Eigen" ON)
 set(
   EIGEN_ALTERNATIVE "" CACHE STRING
   "Path to alternative Eigen, autodownload if blank"
@@ -87,7 +87,7 @@ endif()
 ################################################################################
 message(STATUS "======> Setup Compilation")
 
-add_definitions(-DEIGEN_STACK_ALLOCATION_LIMIT=1048576)
+add_definitions(-DEIGEN_STACK_ALLOCATION_LIMIT=131072)
 include_directories(${EIGEN3_INCLUDE_DIR} "tests")
 include_directories(${OpenCV_INCLUDE_DIRS})
 
@@ -99,6 +99,7 @@ if (NOT EXISTS ${CMAKE_BINARY_DIR}/CMakeCache.txt)
 endif()
 
 # Add c++ flags 
+# target_compile_options(-std=c++17)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -fPIC -Wall -DNDEBUG  -fopenmp")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -fPIC -Wall -g -fopenmp")
 set(CMAKE_CXX_STANDARD 17)

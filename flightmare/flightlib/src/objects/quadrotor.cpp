@@ -10,9 +10,9 @@ Quadrotor::Quadrotor(const std::string &cfg_path)
       (Matrix<3, 2>() << -1000000, 1000000, -1000000, 1000000, 0, 1000000)
         .finished()) {
   // check if configuration file exist
-  if (!(file_exists(cfg_path))) {
-    logger_.error("Configuration file %s does not exists.", cfg_path);
-  }
+  // if (!(file_exists(cfg_path))) {
+  //   logger_.error("Configuration file %s does not exists.", cfg_path);
+  // }
 
   YAML::Node cfg = YAML::LoadFile(cfg_path);
 

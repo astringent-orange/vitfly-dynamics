@@ -27,6 +27,7 @@ class UnityObject {
   bool loadTrajectory(const std::string csv_file);
 
   // publich set functions
+  inline void setLoop(const bool loop) { loop_ = loop; };
   inline void setPosition(const Vector<3>& position) { state_.p = position; };
   inline void setRotation(const Quaternion& quaternion) {
     state_.q(quaternion);
@@ -40,6 +41,7 @@ class UnityObject {
   const std::string prefab_id_;
 
   Scalar sign_;
+  bool loop_{false};
 
   RigidState state_;
 

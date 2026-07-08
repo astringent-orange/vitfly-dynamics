@@ -4,7 +4,6 @@ import argparse
 import rospy
 from dodgeros_msgs.msg import Command
 from dodgeros_msgs.msg import QuadState
-from cv_bridge import CvBridge
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
 from std_msgs.msg import Empty
@@ -13,7 +12,7 @@ from std_msgs.msg import String
 from envsim_msgs.msg import ObstacleArray
 
 # from rl_example import load_rl_policy
-from user_code import compute_command_vision_based, compute_command_state_based
+from user_code import AStarDynamicExpert, compute_command_vision_based, compute_command_state_based, default_planner_info
 from utils import AgileCommandMode, AgileQuadState
 
 import time
@@ -23,10 +22,34 @@ import os, sys
 from os.path import join as opj
 from copy import deepcopy
 import cv2
-import torch
+from cv_bridge import CvBridge
+try:
+    import torch
+except ImportError:
+    torch = None
 
-sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
-from model import *
+if torch is not None:
+    sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
+    from model import *
+
+PLANNER_FIELDS = [
+    "lookahead_x",
+    "lookahead_y",
+    "lookahead_z",
+    "v_path_x",
+    "v_path_y",
+    "v_path_z",
+    "v_avoid_x",
+    "v_avoid_y",
+    "v_avoid_z",
+    "nearest_dyn_dist",
+    "nearest_dyn_rel_speed",
+    "ttc_min",
+    "avoidance_active",
+    "astar_replan_count",
+    "astar_success",
+]
+
 
 class AgilePilotNode:
     def __init__(self, vision_based=False, model_type=None, model_path=None, desVel=None, keyboard=False):
@@ -68,6 +91,8 @@ class AgilePilotNode:
                            'br_cmd_z':[],
                            'is_collide': [],
         } 
+        for field in PLANNER_FIELDS:
+            data_log_format[field] = []
         self.data_log = pd.DataFrame(data_log_format) # store in the data frame
         self.count = 0 # counter for the csv
         
@@ -85,8 +110,15 @@ class AgilePilotNode:
         print(f"[RUN_COMPETITION] Desired velocity = {self.desiredVel}")
         print()
 
+        self.state_expert = None
+        if not self.vision_based and not self.keyboard:
+            self.state_expert = AStarDynamicExpert()
+            print("[RUN_COMPETITION] A* dynamic state expert initialized")
+
         # load trained model here (copied over from user_code.py)
-        if model_path is not None:
+        if self.vision_based and model_path is not None:
+            if torch is None:
+                raise RuntimeError("Torch is required for vision-based model inference.")
             print(f"[RUN_COMPETITION] Model loading from {model_path} ...")
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if model_type == 'LSTMNet':
@@ -201,6 +233,8 @@ class AgilePilotNode:
         self.keyboard_input = ''
         self.got_keypress = 0.0
         self.rgb_img = None
+        self.save_rgb_debug = False
+        self.debug_rgb_folder = opj(self.folder, "debug_rgb")
 
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
@@ -218,6 +252,22 @@ class AgilePilotNode:
             for i in range(len(x)):
                 if i == 0:
                     return float(x[i].split("\n")[0])
+
+    def current_low_level_cmd(self):
+        if self.curr_cmd is None:
+            return 0.0, 0.0, 0.0, 0.0
+        return (
+            self.curr_cmd.collective_thrust,
+            self.curr_cmd.bodyrates.x,
+            self.curr_cmd.bodyrates.y,
+            self.curr_cmd.bodyrates.z,
+        )
+
+    def planner_log_values(self, planner_info):
+        info = default_planner_info()
+        if planner_info is not None:
+            info.update(planner_info)
+        return [info[field] for field in PLANNER_FIELDS]
 
     def img_callback(self, img_data):
         self.ctr += 1
@@ -281,6 +331,7 @@ class AgilePilotNode:
             # Get the collision flag
             if self.col is None:
                 self.col = 0
+            ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
             # Append the data frame
             # @TODO: This needs to be managed better if the number of datapoints exceeds 10,000
             self.data_log.loc[len(self.data_log)] = [
@@ -299,12 +350,12 @@ class AgilePilotNode:
                 command.velocity[0],
                 command.velocity[1],
                 command.velocity[2],
-                self.curr_cmd.collective_thrust,
-                self.curr_cmd.bodyrates.x,
-                self.curr_cmd.bodyrates.y,
-                self.curr_cmd.bodyrates.z,
+                ct_cmd,
+                br_x,
+                br_y,
+                br_z,
                 self.col,
-            ]
+            ] + self.planner_log_values(None)
 
             # Counter flag for saving the data frame
             self.count += 1
@@ -319,11 +370,8 @@ class AgilePilotNode:
     def obstacle_callback(self, obs_data):
         if self.state is None:
             return
-        self.col = self.if_collide(obs_data.obstacles[0])
+        self.col = self.if_collide(obs_data.obstacles[0]) if obs_data.obstacles else 0
         if self.vision_based:
-            return
-        if self.rgb_img is None:
-            print("no rgb image yet")
             return
 
         # try:
@@ -334,13 +382,15 @@ class AgilePilotNode:
         if rospy.Time().now().to_sec() - self.got_keypress > 0.1:
             self.keyboard_input = ''
 
-        command = compute_command_state_based(
+        command, planner_info = compute_command_state_based(
             state=self.state,
             obstacles=obs_data,
             desiredVel=self.desiredVel,
             rl_policy=self.rl_policy,
             keyboard=self.keyboard,
             keyboard_input=self.keyboard_input,
+            expert=self.state_expert,
+            return_info=True,
         )
         self.publish_command(command)
 
@@ -357,7 +407,11 @@ class AgilePilotNode:
             
             self.init = 1
 
-            if self.state.pos[0] > self.data_collection_xrange[0] and self.state.pos[0] < self.data_collection_xrange[1]:
+            if (
+                self.state.pos[0] > self.data_collection_xrange[0]
+                and self.state.pos[0] < self.data_collection_xrange[1]
+                and self.last_valid_img is not None
+            ):
 
                 # reset the time flag
                 self.t1 = self.state.t
@@ -368,10 +422,13 @@ class AgilePilotNode:
                 # Save the image by the name of that instant
                 # np.save(self.folder + f"/im_{timestamp}", self.last_valid_img)
                 cv2.imwrite(f"{self.folder}/{str(timestamp)}.png", (self.last_valid_img*255).astype(np.uint8))
-                cv2.imwrite(f"{self.folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
+                if self.save_rgb_debug and self.rgb_img is not None:
+                    os.makedirs(self.debug_rgb_folder, exist_ok=True)
+                    cv2.imwrite(f"{self.debug_rgb_folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
 
                 # Get the collision flag
-                col = self.if_collide(obs_data.obstacles[0])
+                col = self.if_collide(obs_data.obstacles[0]) if obs_data.obstacles else 0
+                ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
                 # Append the data frame
                 # @TODO: This needs to be managed better if the number of datapoints exceeds 10,000
                 self.data_log.loc[len(self.data_log)] = [
@@ -390,12 +447,12 @@ class AgilePilotNode:
                     command.velocity[0],
                     command.velocity[1],
                     command.velocity[2],
-                    self.curr_cmd.collective_thrust,
-                    self.curr_cmd.bodyrates.x,
-                    self.curr_cmd.bodyrates.y,
-                    self.curr_cmd.bodyrates.z,
+                    ct_cmd,
+                    br_x,
+                    br_y,
+                    br_z,
                     self.col,
-                ]
+                ] + self.planner_log_values(planner_info)
 
                 # Counter flag for saving the data frame
                 self.count += 1

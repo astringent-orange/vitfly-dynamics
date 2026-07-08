@@ -13,7 +13,7 @@ pipeline:
   bridge:
     type:               "ROS"
 
-quadrotor:              "kingfisher.yaml"
+# quadrotor:              "kingfisher.yaml"
 
 dt_min:                 0.01
 dt_telemetry:           5  # Publish telemetry messages with this period (used for GUI and IMU)

@@ -10,9 +10,9 @@ QuadrotorEnv::QuadrotorEnv()
 QuadrotorEnv::QuadrotorEnv(const std::string &cfg_path, const int env_id)
   : EnvBase() {
   // check if configuration file exist
-  if (!(file_exists(cfg_path))) {
-    logger_.error("Configuration file %s does not exists.", cfg_path);
-  }
+  // if (!(file_exists(cfg_path))) {
+  //   logger_.error("Configuration file %s does not exists.", cfg_path);
+  // }
   // load configuration file
   cfg_ = YAML::LoadFile(cfg_path);
   //

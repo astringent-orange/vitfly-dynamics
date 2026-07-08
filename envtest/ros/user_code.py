@@ -1,17 +1,21 @@
 #!/usr/bin/python3
 
 from utils import AgileCommandMode, AgileCommand
-from scipy.spatial.transform import Rotation
 import cv2
 import numpy as np
-import torch
-from torchvision.transforms import ToTensor
+try:
+    import torch
+except ImportError:
+    torch = None
 
 import glob, os, sys, time
 from os.path import join as opj
 
 sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
-from model import *
+if torch is not None:
+    from model import *
+
+from astar_planner import StaticAStarPlanner, default_static_map_path
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
 # sphere determined by a center point (x3, y3, z3) and radius r
@@ -39,6 +43,9 @@ def check_collision(line, obstacle):
 
 
 def compute_command_vision_based(state, orig_img, prev_img, desiredVel, trained_model, hidden_state):
+    if torch is None:
+        raise RuntimeError("Torch is required for vision-based model inference.")
+
     # print("Computing command vision-based!")
 
     """
@@ -73,7 +80,9 @@ def compute_command_vision_based(state, orig_img, prev_img, desiredVel, trained_
     h, w = (60, 90)
     img = cv2.resize(orig_img, (w, h))
     img2 = orig_img.copy() # used for generating debugimg
-    img = ToTensor()(np.array(img))
+    img = torch.from_numpy(np.array(img)).float().unsqueeze(0)
+
+    device = next(trained_model.parameters()).device
 
     if 'LSTMNet' in trained_model.__class__.__name__:
         if trained_model.__class__.__name__ == 'LSTMNet':
@@ -87,18 +96,18 @@ def compute_command_vision_based(state, orig_img, prev_img, desiredVel, trained_
             trained_model.lstm.hidden_size = 200
         else:
             raise Exception ("Incorrect Model specified!!")
-        if state.pos[0] < 0.5 or hidden_state is None: 
-            hidden_state = (torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float(), torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float())
+        if state.pos[0] < 0.5 or hidden_state is None:
+            hidden_state = (torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float().to(device), torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float().to(device))
         with torch.no_grad():
-            x, hidden_state = trained_model([img.view(1, 1, h, w), torch.tensor(desiredVel).view(1, 1).float(), torch.tensor(q).view(1,-1).float() ,hidden_state])
+            x, hidden_state = trained_model([img.view(1, 1, h, w).to(device), torch.tensor(desiredVel).view(1, 1).float().to(device), torch.tensor(q).view(1,-1).float().to(device) ,hidden_state])
 
     else:
 
         with torch.no_grad():
-            x, hidden_state = trained_model([img.view(1, 1, h, w), torch.tensor(desiredVel).view(1, 1).float(), torch.tensor(q).view(1,-1).float()])
+            x, hidden_state = trained_model([img.view(1, 1, h, w).to(device), torch.tensor(desiredVel).view(1, 1).float().to(device), torch.tensor(q).view(1,-1).float().to(device)])
 
 
-    x = x.squeeze().detach().numpy()
+    x = x.squeeze().detach().cpu().numpy()
     x[0] = np.clip(x[0], -1, 1)
     x = x/np.linalg.norm(x)
     command.velocity = x*desiredVel
@@ -135,7 +144,233 @@ def find_closest_zero_index(arr):
     chosen_index = np.random.choice(min_dist_indices)  # randomly choose one of the zero elements with minimum distance to center
     return tuple(zero_indices[chosen_index])  # return index tuple
 
-def compute_command_state_based(state, obstacles, desiredVel, rl_policy=None, keyboard=False, keyboard_input=''):
+def limit_norm(vec, max_norm):
+    vec = np.asarray(vec, dtype=float)
+    norm = np.linalg.norm(vec)
+    if norm < 1e-6:
+        return vec
+    if norm > max_norm:
+        return vec / norm * max_norm
+    return vec
+
+
+def default_planner_info():
+    return {
+        "lookahead_x": 0.0,
+        "lookahead_y": 0.0,
+        "lookahead_z": 0.0,
+        "v_path_x": 0.0,
+        "v_path_y": 0.0,
+        "v_path_z": 0.0,
+        "v_avoid_x": 0.0,
+        "v_avoid_y": 0.0,
+        "v_avoid_z": 0.0,
+        "nearest_dyn_dist": 0.0,
+        "nearest_dyn_rel_speed": 0.0,
+        "ttc_min": 0.0,
+        "avoidance_active": 0,
+        "astar_replan_count": 0,
+        "astar_success": 0,
+    }
+
+
+class AStarDynamicExpert:
+    def __init__(
+        self,
+        static_csv=None,
+        resolution=0.3,
+        inflation_radius=0.5,
+        goal=(60.0, 0.0, 3.0),
+        lookahead_distance=3.0,
+        dynamic_detection_radius=8.0,
+        prediction_horizon=3.0,
+        dynamic_safety_radius=2.2,
+        repulsion_gain=2.4,
+        max_avoid_speed=2.0,
+        smoothing=0.35,
+    ):
+        self.static_csv = static_csv or default_static_map_path()
+        if not os.path.exists(self.static_csv):
+            self.static_csv = opj(
+                os.path.dirname(os.path.abspath(__file__)),
+                "../../flightmare/flightpy/configs/vision/spheres_medium/environment_0/static_obstacles.csv",
+            )
+        self.planner = StaticAStarPlanner(
+            self.static_csv,
+            resolution=resolution,
+            inflation_radius=inflation_radius,
+        )
+        self.goal = np.asarray(goal, dtype=float)
+        self.lookahead_distance = lookahead_distance
+        self.dynamic_detection_radius = dynamic_detection_radius
+        self.prediction_horizon = prediction_horizon
+        self.dynamic_safety_radius = dynamic_safety_radius
+        self.repulsion_gain = repulsion_gain
+        self.max_avoid_speed = max_avoid_speed
+        self.smoothing = smoothing
+        self.path = []
+        self.replan_count = 0
+        self.prev_obstacles = []
+        self.prev_t = None
+        self.prev_v_avoid = np.zeros(3)
+
+    def reset_path(self):
+        self.path = []
+        self.prev_obstacles = []
+        self.prev_t = None
+        self.prev_v_avoid = np.zeros(3)
+
+    def _make_command(self, state, velocity):
+        command = AgileCommand(AgileCommandMode.LINVEL)
+        command.t = state.t
+        command.yawrate = 0.0
+        command.velocity = [float(v) for v in velocity]
+        return command
+
+    def _ensure_path(self, position):
+        if len(self.path) == 0:
+            self.path = self.planner.plan(position, self.goal)
+            self.replan_count += 1
+        return len(self.path) > 0
+
+    def _relative_obstacles(self, obstacles):
+        rel = []
+        for obst in obstacles.obstacles:
+            pos = np.array([obst.position.x, obst.position.y, obst.position.z], dtype=float)
+            if not np.all(np.isfinite(pos)):
+                continue
+            dist = np.linalg.norm(pos)
+            if dist <= self.dynamic_detection_radius and pos[0] > -1.0:
+                rel.append({"pos": pos, "scale": float(obst.scale), "vel": np.zeros(3)})
+        return rel
+
+    def _estimate_relative_velocities(self, rel_obstacles, t):
+        if self.prev_t is None or t <= self.prev_t or not self.prev_obstacles:
+            self.prev_obstacles = [obs["pos"].copy() for obs in rel_obstacles]
+            self.prev_t = t
+            return rel_obstacles
+
+        dt = max(t - self.prev_t, 1e-3)
+        unused_prev = set(range(len(self.prev_obstacles)))
+        for obs in rel_obstacles:
+            if not unused_prev:
+                break
+            best_idx = min(unused_prev, key=lambda idx: np.linalg.norm(obs["pos"] - self.prev_obstacles[idx]))
+            if np.linalg.norm(obs["pos"] - self.prev_obstacles[best_idx]) < 3.0:
+                obs["vel"] = (obs["pos"] - self.prev_obstacles[best_idx]) / dt
+                unused_prev.remove(best_idx)
+
+        self.prev_obstacles = [obs["pos"].copy() for obs in rel_obstacles]
+        self.prev_t = t
+        return rel_obstacles
+
+    def _dynamic_avoidance(self, rel_obstacles):
+        v_avoid = np.zeros(3)
+        nearest_dist = float("inf")
+        nearest_rel_speed = 0.0
+        ttc_min = float("inf")
+        active = 0
+
+        for obs in rel_obstacles:
+            p_rel = obs["pos"]
+            v_rel = obs["vel"]
+            dist = np.linalg.norm(p_rel)
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest_rel_speed = np.linalg.norm(v_rel)
+
+            safety = self.dynamic_safety_radius + 0.5 * obs["scale"]
+            v_rel_norm2 = float(np.dot(v_rel, v_rel))
+            if v_rel_norm2 > 1e-6:
+                ttc = float(np.clip(-np.dot(p_rel, v_rel) / v_rel_norm2, 0.0, self.prediction_horizon))
+                closest = p_rel + v_rel * ttc
+                closest_dist = np.linalg.norm(closest)
+            else:
+                ttc = float("inf")
+                closest = p_rel
+                closest_dist = dist
+
+            dangerous = (ttc <= self.prediction_horizon and closest_dist < safety) or dist < safety
+            if dangerous:
+                active = 1
+                ttc_min = min(ttc_min, ttc if np.isfinite(ttc) else self.prediction_horizon)
+                away = -closest / max(np.linalg.norm(closest), 1e-6)
+                away[0] = 0.0
+                if np.linalg.norm(away) < 1e-6:
+                    away = np.array([0.0, 1.0, 0.0])
+                else:
+                    away = away / np.linalg.norm(away)
+                strength = self.repulsion_gain * max(0.0, safety - closest_dist) / safety
+                if np.isfinite(ttc):
+                    strength *= 1.0 + (self.prediction_horizon - ttc) / self.prediction_horizon
+                v_avoid += away * strength
+
+        v_avoid = limit_norm(v_avoid, self.max_avoid_speed)
+        v_avoid = self.smoothing * self.prev_v_avoid + (1.0 - self.smoothing) * v_avoid
+        self.prev_v_avoid = v_avoid
+
+        if not np.isfinite(nearest_dist):
+            nearest_dist = 0.0
+        if not np.isfinite(ttc_min):
+            ttc_min = 0.0
+
+        return v_avoid, {
+            "nearest_dyn_dist": nearest_dist,
+            "nearest_dyn_rel_speed": nearest_rel_speed,
+            "ttc_min": ttc_min,
+            "avoidance_active": active,
+        }
+
+    def compute_command(self, state, obstacles, desiredVel):
+        pos = np.asarray(state.pos, dtype=float)
+        if pos[0] < 0.5:
+            self.reset_path()
+
+        astar_success = self._ensure_path(pos)
+        if astar_success:
+            lookahead = self.planner.first_lookahead(self.path, pos, self.lookahead_distance)
+            path_vec = lookahead - pos
+            v_path = limit_norm(path_vec, desiredVel)
+            if np.linalg.norm(v_path) > 1e-6:
+                v_path = v_path / np.linalg.norm(v_path) * desiredVel
+        else:
+            lookahead = np.array([pos[0] + 4.0, 0.0, 3.0])
+            v_path = np.array([desiredVel, 0.0, 0.0])
+
+        rel_obstacles = self._estimate_relative_velocities(self._relative_obstacles(obstacles), state.t)
+        v_avoid, avoid_info = self._dynamic_avoidance(rel_obstacles)
+        v_cmd = limit_norm(v_path + v_avoid, desiredVel)
+
+        if pos[2] < 2.0:
+            v_cmd[2] = max(v_cmd[2], (2.0 - pos[2]) * 2.0)
+        if pos[0] < 2.0:
+            v_cmd[0] = max(1.0, (pos[0] / 2.0) * desiredVel)
+
+        info = default_planner_info()
+        info.update(
+            {
+                "lookahead_x": lookahead[0],
+                "lookahead_y": lookahead[1],
+                "lookahead_z": lookahead[2],
+                "v_path_x": v_path[0],
+                "v_path_y": v_path[1],
+                "v_path_z": v_path[2],
+                "v_avoid_x": v_avoid[0],
+                "v_avoid_y": v_avoid[1],
+                "v_avoid_z": v_avoid[2],
+                "astar_replan_count": self.replan_count,
+                "astar_success": int(astar_success),
+            }
+        )
+        info.update(avoid_info)
+        return self._make_command(state, v_cmd), info
+
+
+def compute_command_state_based(state, obstacles, desiredVel, rl_policy=None, keyboard=False, keyboard_input='', expert=None, return_info=False):
+    if expert is not None and not keyboard:
+        command, planner_info = expert.compute_command(state, obstacles, desiredVel)
+        return (command, planner_info) if return_info else command
+
     # print("Computing command based on obstacle information!")
     # print("Obstacles: ", obstacles)
 
@@ -330,4 +565,6 @@ def compute_command_state_based(state, obstacles, desiredVel, rl_policy=None, ke
     # !!! End !!!
     ###############################################
 
+    if return_info:
+        return command, default_planner_info()
     return command

@@ -1,5 +1,5 @@
+cmake_minimum_required(VERSION 3.5)
 project(dodgeros)
-cmake_minimum_required(VERSION 3.0.0)
 
 find_package(catkin_simple REQUIRED)
 
@@ -28,7 +28,7 @@ endif ()
 
 # Setup General C++ Flags
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_STACK_ALLOCATION_LIMIT=1048576")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_STACK_ALLOCATION_LIMIT=131072")
 
 # Setup Release and Debug flags
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_ARCH_FLAGS} -O3 -DNDEBUG")

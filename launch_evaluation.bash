@@ -86,16 +86,64 @@ then
   export FLIGHTMARE_PATH=$PWD/flightmare
 fi
 
+ros_master_ready() {
+  rostopic list >/dev/null 2>&1
+}
+
+wait_for_ros_master() {
+  timeout_s="${1:-40}"
+  start_wait=$(date +%s)
+  while ! ros_master_ready
+  do
+    if ((($(date +%s) - start_wait) >= timeout_s))
+    then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+wait_for_process_exit() {
+  process_name="$1"
+  timeout_s="${2:-10}"
+  start_wait=$(date +%s)
+  while pgrep -x "$process_name" >/dev/null
+  do
+    if ((($(date +%s) - start_wait) >= timeout_s))
+    then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 launch_simulator() {
-  if [ -z $(pgrep visionsim_node) ]
+  if pgrep -x visionsim_node >/dev/null && ros_master_ready
   then
-    roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=$rviz_enabled $realtimefactor &
-    ROS_PID="$!"
-    echo $ROS_PID
-    sleep 10
-  else
     ROS_PID=""
+    return 0
   fi
+
+  if pgrep -x visionsim_node >/dev/null
+  then
+    echo "[LAUNCH SCRIPT] Found stale visionsim_node without ROS master, cleaning it before launch."
+    killall -9 visionsim_node flight_render dodgeros_pilot 2>/dev/null
+    wait_for_process_exit visionsim_node 10
+  fi
+
+  roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=$rviz_enabled $realtimefactor &
+  ROS_PID="$!"
+  echo $ROS_PID
+
+  if ! wait_for_ros_master 45
+  then
+    echo "[LAUNCH SCRIPT] ERROR: ROS master did not become ready after launching simulator."
+    return 1
+  fi
+
+  sleep 10
 }
 
 stop_simulator() {
@@ -109,18 +157,19 @@ stop_simulator() {
 
 force_stop_simulator() {
   stop_simulator
-  killall -9 roscore rosmaster rosout gzserver gzclient RPG_Flightmare. 2>/dev/null
+  killall -9 roslaunch visionsim_node flight_render dodgeros_pilot roscore rosmaster rosout gzserver gzclient RPG_Flightmare. rviz 2>/dev/null
+  wait_for_process_exit visionsim_node 10
   sleep 10
 }
 
 if ((random_env))
 then
-  force_stop_simulator
+  ROS_PID=""
 else
   export VITFLY_ENV_LEVEL="${VITFLY_ENV_LEVEL:-$env_level}"
   export VITFLY_ENV_FOLDER="${VITFLY_ENV_FOLDER:-environment_0}"
   export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
-  launch_simulator
+  launch_simulator || exit 1
 fi
 
 SUMMARY_FILE="evaluation.yaml"
@@ -140,7 +189,8 @@ do
     export VITFLY_ENV_FOLDER="environment_$env_id"
     export VITFLY_ENV_SEED="$((10 + env_id))"
     echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED"
-    launch_simulator
+    force_stop_simulator
+    launch_simulator || exit 1
   fi
 
   # Reset the simulator if needed
@@ -161,7 +211,7 @@ do
     force_stop_simulator
 
     # Launch the simulator, unless it is already running
-    launch_simulator
+    launch_simulator || exit 1
 
   fi
 
@@ -224,7 +274,6 @@ do
   if ((random_env))
   then
     stop_simulator
-    force_stop_simulator
   fi
 done
 

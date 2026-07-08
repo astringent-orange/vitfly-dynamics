@@ -16,6 +16,25 @@ DIFFICULTY_CONFIG = {
 }
 
 
+def parse_env_ids(value):
+    env_ids = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            start_id = int(start)
+            end_id = int(end)
+            step = 1 if end_id >= start_id else -1
+            env_ids.extend(range(start_id, end_id + step, step))
+        else:
+            env_ids.append(int(part))
+    if not env_ids:
+        raise argparse.ArgumentTypeError("env id list is empty")
+    return env_ids
+
+
 def repo_root():
     return Path(__file__).resolve().parents[2]
 
@@ -52,17 +71,19 @@ def write_dynamic_yaml(path, objects):
                 f.write(f"  - {obj['scale']:.6f}\n")
 
 
-def generate(args):
-    rng = np.random.default_rng(args.seed)
+def generate_one(args, env_id):
+    rng = np.random.default_rng(args.seed + env_id * 9973)
     root = repo_root()
-    source_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / "spheres_medium" / "environment_0"
-    output_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / f"dynamic_astar_{args.difficulty}" / "environment_0"
+    source_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / args.source_level / f"environment_{env_id}"
+    output_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / f"dynamic_astar_{args.difficulty}" / f"environment_{env_id}"
     csv_dir = output_dir / "csvtrajs"
 
     if not source_dir.exists():
         raise FileNotFoundError(f"Source environment not found: {source_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if csv_dir.exists():
+        shutil.rmtree(csv_dir)
     csv_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_dir / "static_obstacles.csv", output_dir / "static_obstacles.csv")
 
@@ -93,11 +114,18 @@ def generate(args):
     print(f"[GEN_DYNAMIC_ASTAR] Wrote {args.num_dynamic} dynamic obstacles to {output_dir}")
 
 
+def generate(args):
+    for env_id in args.env_ids:
+        generate_one(args, env_id)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate dynamic A* data-collection environment.")
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--num-dynamic", type=int, default=8)
     parser.add_argument("--difficulty", choices=sorted(DIFFICULTY_CONFIG.keys()), default="medium")
+    parser.add_argument("--source-level", default="spheres_medium")
+    parser.add_argument("--env-ids", type=parse_env_ids, default=[0], help="Environment ids, e.g. 0, 0-9, or 0,2,4.")
     parser.add_argument("--dt", type=float, default=0.02)
     args = parser.parse_args()
     generate(args)

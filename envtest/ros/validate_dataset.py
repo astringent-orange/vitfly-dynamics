@@ -11,6 +11,9 @@ import numpy as np
 
 REQUIRED_COLUMNS = [
     "timestamp",
+    "env_level",
+    "env_folder",
+    "env_seed",
     "velcmd_x",
     "velcmd_y",
     "velcmd_z",

@@ -533,6 +533,14 @@ bool VisionEnv::loadParam(const YAML::Node &cfg) {
   if (cfg["environment"]) {
     difficulty_level_ = cfg["environment"]["level"].as<std::string>();
     env_folder_ = cfg["environment"]["env_folder"].as<std::string>();
+    const char *env_level_override = getenv("VITFLY_ENV_LEVEL");
+    const char *env_folder_override = getenv("VITFLY_ENV_FOLDER");
+    if (env_level_override && std::string(env_level_override).size() > 0) {
+      difficulty_level_ = std::string(env_level_override);
+    }
+    if (env_folder_override && std::string(env_folder_override).size() > 0) {
+      env_folder_ = std::string(env_folder_override);
+    }
     world_box_ = cfg["environment"]["world_box"].as<std::vector<Scalar>>();
     std::vector<Scalar> goal_vel_vec =
       cfg["environment"]["goal_vel"].as<std::vector<Scalar>>();
@@ -584,6 +592,8 @@ bool VisionEnv::loadParam(const YAML::Node &cfg) {
 
   logger_.info("Datagen: %d",_datagen);
   logger_.info("Rollout: %d",_rollout);
+  logger_.info("Environment Level: %s", difficulty_level_.c_str());
+  logger_.info("Environment Folder: %s", env_folder_.c_str());
   logger_.info("Move Obstacle Trigger: %d",_move_obst_trigger);
   logger_.info("Dynamic Obstacles Motion: %d",_dynamic_obstacles_motion);
 

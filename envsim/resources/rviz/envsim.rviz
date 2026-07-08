@@ -150,7 +150,7 @@ Visualization Manager:
         Shaft Length: 1
         Shaft Radius: 0.05000000074505806
         Value: Axes
-      Topic: ground_truth/odometry
+      Topic: groundtruth/odometry
       Unreliable: false
       Value: true
     - Angle Tolerance: 0

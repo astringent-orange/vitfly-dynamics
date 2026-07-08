@@ -10,6 +10,32 @@ fi
 
 echo $2
 
+state_human=0
+random_env=0
+force_rviz=0
+env_count="${VITFLY_ENV_COUNT:-10}"
+env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
+
+for arg in "${@:3}"
+do
+  if [ "$arg" = "human" ]
+  then
+    state_human=1
+  elif [ "$arg" = "random_env" ]
+  then
+    random_env=1
+  elif [ "$arg" = "rviz" ] || [ "$arg" = "debug" ]
+  then
+    force_rviz=1
+  elif [[ "$arg" == env_count=* ]]
+  then
+    env_count="${arg#env_count=}"
+  elif [[ "$arg" == env_level=* ]]
+  then
+    env_level="${arg#env_level=}"
+  fi
+done
+
 if [ "$2" = "vision" ]
 then
   echo
@@ -17,16 +43,19 @@ then
   echo
   run_competition_args="--vision_based"
   realtimefactor=""
+  rviz_enabled=True
 elif [ "$2" = "state" ]
 then
   echo
   echo "[LAUNCH SCRIPT] State based!"
   echo
   run_competition_args="--state_based"
-  if [ "$3" = "human" ]
+  rviz_enabled=False
+  if ((state_human))
   then
     run_competition_args="--keyboard"
     realtimefactor="real_time_factor:=1.0"
+    rviz_enabled=True
   else
     run_competition_args=""
     realtimefactor="real_time_factor:=10.0"
@@ -38,21 +67,52 @@ else
   exit 1
 fi
 
+if ((force_rviz))
+then
+  rviz_enabled=True
+fi
+
 # Set Flightmare Path if it is not set
 if [ -z $FLIGHTMARE_PATH ]
 then
   export FLIGHTMARE_PATH=$PWD/flightmare
 fi
 
-# Launch the simulator, unless it is already running
-if [ -z $(pgrep visionsim_node) ]
-then
-  roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=True $realtimefactor &
-  ROS_PID="$!"
-  echo $ROS_PID
+launch_simulator() {
+  if [ -z $(pgrep visionsim_node) ]
+  then
+    roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=$rviz_enabled $realtimefactor &
+    ROS_PID="$!"
+    echo $ROS_PID
+    sleep 10
+  else
+    ROS_PID=""
+  fi
+}
+
+stop_simulator() {
+  if [ $ROS_PID ]
+  then
+    kill -SIGINT "$ROS_PID"
+    sleep 3
+    ROS_PID=""
+  fi
+}
+
+force_stop_simulator() {
+  stop_simulator
+  killall -9 roscore rosmaster rosout gzserver gzclient RPG_Flightmare. 2>/dev/null
   sleep 10
+}
+
+if ((random_env))
+then
+  force_stop_simulator
 else
-  ROS_PID=""
+  export VITFLY_ENV_LEVEL="${VITFLY_ENV_LEVEL:-$env_level}"
+  export VITFLY_ENV_FOLDER="${VITFLY_ENV_FOLDER:-environment_0}"
+  export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
+  launch_simulator
 fi
 
 SUMMARY_FILE="evaluation.yaml"
@@ -65,6 +125,16 @@ relaunch_sim=0
 
 for i in $(eval echo {1..$N})
 do
+  if ((random_env))
+  then
+    env_id=$(( (i - 1) % env_count ))
+    export VITFLY_ENV_LEVEL="$env_level"
+    export VITFLY_ENV_FOLDER="environment_$env_id"
+    export VITFLY_ENV_SEED="$((10 + env_id))"
+    echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED"
+    launch_simulator
+  fi
+
   # Reset the simulator if needed
   if ((relaunch_sim))
   then
@@ -80,20 +150,10 @@ do
 
     # reset flag and kill everything to restart
     relaunch_sim=0
-    killall -9 roscore rosmaster rosout gzserver gzclient RPG_Flightmare.
-    sleep 10
+    force_stop_simulator
 
     # Launch the simulator, unless it is already running
-    if [ -z $(pgrep visionsim_node) ]
-    then
-      roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=True $realtimefactor &
-      ROS_PID="$!"
-      echo $ROS_PID
-      sleep 10
-    else
-      killall -9 roscore rosmaster rosout gzserver gzclient RPG_Flightmare.
-      sleep 10
-    fi
+    launch_simulator
 
   fi
 
@@ -153,6 +213,11 @@ do
   mv "tmp.yaml" "$SUMMARY_FILE"
 
   kill -SIGINT "$COMP_PID"
+  if ((random_env))
+  then
+    stop_simulator
+    force_stop_simulator
+  fi
 done
 
 if [ $ROS_PID ]

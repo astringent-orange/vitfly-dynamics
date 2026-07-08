@@ -15,6 +15,7 @@ from envsim_msgs.msg import ObstacleArray
 from user_code import AStarDynamicExpert, compute_command_vision_based, compute_command_state_based, default_planner_info
 from utils import AgileCommandMode, AgileQuadState
 
+import atexit
 import time
 import numpy as np
 import pandas as pd
@@ -72,6 +73,9 @@ class AgilePilotNode:
         self.last_valid_img = None #Image that will be logged
         data_log_format = {'timestamp':[],
                            'desired_vel':[],
+                           'env_level':[],
+                           'env_folder':[],
+                           'env_seed':[],
                            'quat_1':[],
                            'quat_2':[],
                            'quat_3':[],
@@ -104,10 +108,16 @@ class AgilePilotNode:
         # make the folder for the epoch
         self.folder = f"train_set/{int(time.time()*100)}" 
         os.mkdir(self.folder)
+        self.env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
+        self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
+        self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
+        atexit.register(self.flush_data_log)
+        rospy.on_shutdown(self.flush_data_log)
 
         self.desiredVel = desVel #self.readVel("velocity.txt") #np.random.uniform(low=2.0, high=3.0)
         print()
         print(f"[RUN_COMPETITION] Desired velocity = {self.desiredVel}")
+        print(f"[RUN_COMPETITION] Environment = {self.env_level}/{self.env_folder} seed={self.env_seed}")
         print()
 
         self.state_expert = None
@@ -269,6 +279,13 @@ class AgilePilotNode:
             info.update(planner_info)
         return [info[field] for field in PLANNER_FIELDS]
 
+    def flush_data_log(self):
+        try:
+            if hasattr(self, "folder") and hasattr(self, "data_log"):
+                self.data_log.to_csv(self.folder + "/data.csv", index=False)
+        except Exception as exc:
+            print(f"[RUN_COMPETITION] Failed to flush data.csv: {exc}")
+
     def img_callback(self, img_data):
         self.ctr += 1
         self.prevImg = deepcopy(self.last_valid_img)
@@ -325,8 +342,10 @@ class AgilePilotNode:
                 self.state.t, 3
             )  # If you need more hz, you might need to modify this round
 
-            # Save the image by the name of that instant
-            cv2.imwrite(f"{self.folder}/{str(timestamp)}.png", (self.last_valid_img*255).astype(np.uint8))
+            image_path = f"{self.folder}/{str(timestamp)}.png"
+            if not cv2.imwrite(image_path, (self.last_valid_img*255).astype(np.uint8)):
+                print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
+                return
 
             # Get the collision flag
             if self.col is None:
@@ -337,6 +356,9 @@ class AgilePilotNode:
             self.data_log.loc[len(self.data_log)] = [
                 timestamp,
                 self.desiredVel,
+                self.env_level,
+                self.env_folder,
+                self.env_seed,
                 self.state.att[0],
                 self.state.att[1],
                 self.state.att[2],
@@ -362,7 +384,7 @@ class AgilePilotNode:
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 5 == 0:
-            self.data_log.to_csv(self.folder + "/data.csv", index=False)
+            self.flush_data_log()
 
     def state_callback(self, state_data):
         self.state = AgileQuadState(state_data)
@@ -421,7 +443,10 @@ class AgilePilotNode:
 
                 # Save the image by the name of that instant
                 # np.save(self.folder + f"/im_{timestamp}", self.last_valid_img)
-                cv2.imwrite(f"{self.folder}/{str(timestamp)}.png", (self.last_valid_img*255).astype(np.uint8))
+                image_path = f"{self.folder}/{str(timestamp)}.png"
+                if not cv2.imwrite(image_path, (self.last_valid_img*255).astype(np.uint8)):
+                    print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
+                    return
                 if self.save_rgb_debug and self.rgb_img is not None:
                     os.makedirs(self.debug_rgb_folder, exist_ok=True)
                     cv2.imwrite(f"{self.debug_rgb_folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
@@ -434,6 +459,9 @@ class AgilePilotNode:
                 self.data_log.loc[len(self.data_log)] = [
                     timestamp,
                     self.desiredVel,
+                    self.env_level,
+                    self.env_folder,
+                    self.env_seed,
                     self.state.att[0],
                     self.state.att[1],
                     self.state.att[2],
@@ -459,7 +487,7 @@ class AgilePilotNode:
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 2 == 0 and self.count != 0 or abs(self.state.pos[0] - 20) < 1:
-            self.data_log.to_csv(self.folder + "/data.csv", index=False)
+            self.flush_data_log()
 
     def if_collide(self, obs):
         """
@@ -533,3 +561,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, model_type=args.model_type, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard)
     rospy.spin()
+    agile_pilot_node.flush_data_log()

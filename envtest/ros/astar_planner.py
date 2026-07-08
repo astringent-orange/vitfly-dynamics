@@ -184,6 +184,8 @@ class StaticAStarPlanner:
 
 
 def default_static_map_path():
+    env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
+    env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
     flightmare_path = os.environ.get("FLIGHTMARE_PATH")
     if flightmare_path:
         return os.path.join(
@@ -191,8 +193,8 @@ def default_static_map_path():
             "flightpy",
             "configs",
             "vision",
-            "dynamic_astar_medium",
-            "environment_0",
+            env_level,
+            env_folder,
             "static_obstacles.csv",
         )
     return os.path.abspath(
@@ -204,8 +206,8 @@ def default_static_map_path():
             "flightpy",
             "configs",
             "vision",
-            "dynamic_astar_medium",
-            "environment_0",
+            env_level,
+            env_folder,
             "static_obstacles.csv",
         )
     )

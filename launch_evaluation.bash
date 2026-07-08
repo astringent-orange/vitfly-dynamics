@@ -192,6 +192,26 @@ force_stop_simulator() {
   sleep 10
 }
 
+stop_controller() {
+  if [ -z "$COMP_PID" ]
+  then
+    return
+  fi
+  if ps -p "$COMP_PID" > /dev/null
+  then
+    rostopic pub /kingfisher/finish_navigation std_msgs/Empty "{}" --once >/dev/null 2>&1
+    for _ in $(seq 1 5)
+    do
+      if ! ps -p "$COMP_PID" > /dev/null
+      then
+        return
+      fi
+      sleep 1
+    done
+    kill -SIGINT "$COMP_PID"
+  fi
+}
+
 if ((random_env))
 then
   ROS_PID=""
@@ -301,7 +321,7 @@ do
   cat "$SUMMARY_FILE" "./envtest/ros/summary.yaml" > "tmp.yaml"
   mv "tmp.yaml" "$SUMMARY_FILE"
 
-  kill -SIGINT "$COMP_PID"
+  stop_controller
   if ((random_env))
   then
     stop_simulator

@@ -54,6 +54,8 @@ PLANNER_FIELDS = [
     "nearest_static_dist",
     "dynamic_obstacle_count",
     "v_slowdown_x",
+    "v_slowdown_dynamic_x",
+    "v_slowdown_static_x",
 ]
 
 
@@ -70,6 +72,7 @@ class AgilePilotNode:
         self.keyboard = keyboard
         self.dynamic_obstacles = None
         self.is_shutting_down = False
+        self.finished = False
 
         quad_name = "kingfisher"
 
@@ -173,6 +176,13 @@ class AgilePilotNode:
             "/" + quad_name + "/start_navigation",
             Empty,
             self.start_callback,
+            queue_size=1,
+            tcp_nodelay=True,
+        )
+        self.finish_sub = rospy.Subscriber(
+            "/" + quad_name + "/finish_navigation",
+            Empty,
+            self.finish_callback,
             queue_size=1,
             tcp_nodelay=True,
         )
@@ -305,7 +315,38 @@ class AgilePilotNode:
         self.publish_commands = False
         self.flush_data_log()
 
+    def reached_goal(self):
+        return self.state is not None and self.state.pos[0] >= self.data_collection_xrange[1]
+
+    def publish_zero_velocity(self):
+        if not hasattr(self, "linvel_pub"):
+            return
+        try:
+            vel_msg = TwistStamped()
+            vel_msg.header.stamp = rospy.Time.now()
+            vel_msg.twist.linear.x = 0.0
+            vel_msg.twist.linear.y = 0.0
+            vel_msg.twist.linear.z = 0.0
+            vel_msg.twist.angular.x = 0.0
+            vel_msg.twist.angular.y = 0.0
+            vel_msg.twist.angular.z = 0.0
+            self.linvel_pub.publish(vel_msg)
+        except rospy.exceptions.ROSException:
+            pass
+
+    def finish_run(self, reason):
+        if self.finished:
+            return
+        self.finished = True
+        print(f"[RUN_COMPETITION] Finishing run: {reason}")
+        self.publish_zero_velocity()
+        self.publish_commands = False
+        self.flush_data_log()
+        rospy.signal_shutdown(reason)
+
     def img_callback(self, img_data):
+        if rospy.is_shutdown() or self.is_shutting_down or self.finished:
+            return
         self.ctr += 1
         self.prevImg = deepcopy(self.last_valid_img)
         img = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding="passthrough")
@@ -325,6 +366,9 @@ class AgilePilotNode:
             return
         
         if self.state is None:
+            return
+        if self.reached_goal():
+            self.finish_run("Reached goal")
             return
         
         # print('[RUN_COMPETITION] calling compute_command_vision_based')
@@ -352,7 +396,7 @@ class AgilePilotNode:
             self.logged_time_flag = 1
         
         #if we exceed the time interval then save the data
-        if (self.state.t - self.t1 > self.time_interval or self.t1==0) and self.state.pos[0] < 63:
+        if (self.state.t - self.t1 > self.time_interval or self.t1==0) and self.state.pos[0] < self.data_collection_xrange[1] and not self.finished:
             #reset the time flag
             self.t1 = self.state.t
 
@@ -407,11 +451,16 @@ class AgilePilotNode:
 
     def state_callback(self, state_data):
         self.state = AgileQuadState(state_data)
+        if self.reached_goal():
+            self.finish_run("Reached goal")
 
     def obstacle_callback(self, obs_data):
-        if rospy.is_shutdown() or self.is_shutting_down:
+        if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
         if self.state is None:
+            return
+        if self.reached_goal():
+            self.finish_run("Reached goal")
             return
         nearest_margin = self.nearest_obstacle_margin(obs_data)
         self.col = int(nearest_margin < 0.0)
@@ -457,6 +506,7 @@ class AgilePilotNode:
                 self.state.pos[0] > self.data_collection_xrange[0]
                 and self.state.pos[0] < self.data_collection_xrange[1]
                 and self.last_valid_img is not None
+                and not self.finished
             ):
 
                 # reset the time flag
@@ -514,6 +564,9 @@ class AgilePilotNode:
 
     def dynamic_obstacle_callback(self, obs_data):
         self.dynamic_obstacles = obs_data
+
+    def finish_callback(self, _msg):
+        self.finish_run("Received finish_navigation")
 
     def nearest_obstacle_margin(self, obstacles):
         if obstacles is None or not obstacles.obstacles:
@@ -593,7 +646,7 @@ class AgilePilotNode:
         return False
 
     def start_callback(self, data):
-        if rospy.is_shutdown() or self.is_shutting_down:
+        if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
         print("[RUN_COMPETITION] Start publishing commands!")
         self.publish_commands = True

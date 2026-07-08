@@ -34,12 +34,20 @@ REQUIRED_COLUMNS = [
     "nearest_static_dist",
     "dynamic_obstacle_count",
     "v_slowdown_x",
+    "v_slowdown_dynamic_x",
+    "v_slowdown_static_x",
 ]
 
 ENV_COLUMNS = ["env_level", "env_folder", "env_seed"]
 
 
-def validate_trajectory(path, require_env_fields=False):
+def validate_trajectory(
+    path,
+    require_env_fields=False,
+    max_post_goal_rows=0,
+    max_negative_xcmd_rows=0,
+    max_low_speed_ratio=0.15,
+):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
         return [f"{path}: missing data.csv"], 0, 0, set()
@@ -76,6 +84,21 @@ def validate_trajectory(path, require_env_fields=False):
         else:
             if not np.isfinite(vel_values).all():
                 errors.append(f"{path}: non-finite velocity command")
+            negative_xcmd_rows = int(np.sum(vel_values[:, 0] < -1e-3))
+            if negative_xcmd_rows > max_negative_xcmd_rows:
+                errors.append(f"{path}: negative velcmd_x rows {negative_xcmd_rows} > {max_negative_xcmd_rows}")
+            low_speed_rows = int(np.sum(np.linalg.norm(vel_values, axis=1) < 0.3))
+            low_speed_ratio = low_speed_rows / max(len(rows), 1)
+            if low_speed_ratio > max_low_speed_ratio:
+                errors.append(f"{path}: low-speed ratio {low_speed_ratio:.3f} > {max_low_speed_ratio:.3f}")
+    if "pos_x" in fieldnames:
+        try:
+            post_goal_rows = sum(1 for row in rows if float(row["pos_x"]) >= 60.0)
+        except ValueError:
+            errors.append(f"{path}: invalid pos_x")
+        else:
+            if post_goal_rows > max_post_goal_rows:
+                errors.append(f"{path}: post-goal rows {post_goal_rows} > {max_post_goal_rows}")
     astar_success = 0
     if "astar_success" in fieldnames:
         astar_success = sum(int(float(row["astar_success"])) for row in rows if row.get("astar_success", "") != "")
@@ -95,6 +118,9 @@ def main():
     parser.add_argument("dataset_dir", help="Directory containing trajectory subfolders.")
     parser.add_argument("--require-env-fields", action="store_true", help="Fail trajectories that do not contain env_level/env_folder/env_seed columns.")
     parser.add_argument("--require-multiple-envs", action="store_true", help="Fail unless at least two env_folder values are present.")
+    parser.add_argument("--max-post-goal-rows", type=int, default=0)
+    parser.add_argument("--max-negative-xcmd-rows", type=int, default=0)
+    parser.add_argument("--max-low-speed-ratio", type=float, default=0.15)
     args = parser.parse_args()
 
     folders = sorted(p for p in glob.glob(os.path.join(args.dataset_dir, "*")) if os.path.isdir(p))
@@ -107,7 +133,13 @@ def main():
     avoidance_rows = 0
     env_folders = set()
     for folder in folders:
-        errors, count, avoidance_count, folder_envs = validate_trajectory(folder, args.require_env_fields)
+        errors, count, avoidance_count, folder_envs = validate_trajectory(
+            folder,
+            require_env_fields=args.require_env_fields,
+            max_post_goal_rows=args.max_post_goal_rows,
+            max_negative_xcmd_rows=args.max_negative_xcmd_rows,
+            max_low_speed_ratio=args.max_low_speed_ratio,
+        )
         all_errors.extend(errors)
         rows += count
         avoidance_rows += avoidance_count

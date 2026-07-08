@@ -11,9 +11,6 @@ import numpy as np
 
 REQUIRED_COLUMNS = [
     "timestamp",
-    "env_level",
-    "env_folder",
-    "env_seed",
     "velcmd_x",
     "velcmd_y",
     "velcmd_z",
@@ -34,11 +31,13 @@ REQUIRED_COLUMNS = [
     "astar_success",
 ]
 
+ENV_COLUMNS = ["env_level", "env_folder", "env_seed"]
 
-def validate_trajectory(path):
+
+def validate_trajectory(path, require_env_fields=False):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
-        return [f"{path}: missing data.csv"], 0, 0
+        return [f"{path}: missing data.csv"], 0, 0, set()
 
     errors = []
     with open(csv_path, newline="") as f:
@@ -50,6 +49,9 @@ def validate_trajectory(path):
     missing = [col for col in REQUIRED_COLUMNS if col not in fieldnames]
     if missing:
         errors.append(f"{path}: missing columns {missing}")
+    missing_env = [col for col in ENV_COLUMNS if col not in fieldnames]
+    if require_env_fields and missing_env:
+        errors.append(f"{path}: missing env columns {missing_env}")
     if rgb_pngs:
         errors.append(f"{path}: found RGB debug PNGs in trajectory root")
     if len(depth_pngs) != len(rows):
@@ -77,12 +79,17 @@ def validate_trajectory(path):
     avoidance_rows = 0
     if "avoidance_active" in fieldnames:
         avoidance_rows = sum(int(float(row["avoidance_active"])) for row in rows if row.get("avoidance_active", "") != "")
-    return errors, len(rows), avoidance_rows
+    env_folders = set()
+    if "env_folder" in fieldnames:
+        env_folders = {row["env_folder"] for row in rows if row.get("env_folder", "")}
+    return errors, len(rows), avoidance_rows, env_folders
 
 
 def main():
     parser = argparse.ArgumentParser(description="Validate dynamic A* expert dataset folders.")
     parser.add_argument("dataset_dir", help="Directory containing trajectory subfolders.")
+    parser.add_argument("--require-env-fields", action="store_true", help="Fail trajectories that do not contain env_level/env_folder/env_seed columns.")
+    parser.add_argument("--require-multiple-envs", action="store_true", help="Fail unless at least two env_folder values are present.")
     args = parser.parse_args()
 
     folders = sorted(p for p in glob.glob(os.path.join(args.dataset_dir, "*")) if os.path.isdir(p))
@@ -93,11 +100,16 @@ def main():
     all_errors = []
     rows = 0
     avoidance_rows = 0
+    env_folders = set()
     for folder in folders:
-        errors, count, avoidance_count = validate_trajectory(folder)
+        errors, count, avoidance_count, folder_envs = validate_trajectory(folder, args.require_env_fields)
         all_errors.extend(errors)
         rows += count
         avoidance_rows += avoidance_count
+        env_folders.update(folder_envs)
+
+    if args.require_multiple_envs and len(env_folders) < 2:
+        all_errors.append(f"{args.dataset_dir}: only found env folders {sorted(env_folders)}")
 
     if all_errors:
         print("[VALIDATE_DATASET] Failed:")
@@ -105,7 +117,8 @@ def main():
             print(f"  - {error}")
         return 1
 
-    print(f"[VALIDATE_DATASET] OK: {len(folders)} trajectories, {rows} rows, {avoidance_rows} avoidance-active rows")
+    env_summary = f", env_folders={sorted(env_folders)}" if env_folders else ""
+    print(f"[VALIDATE_DATASET] OK: {len(folders)} trajectories, {rows} rows, {avoidance_rows} avoidance-active rows{env_summary}")
     return 0
 
 

@@ -22,6 +22,8 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
 
   obstacle_pub_ =
     pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/obstacles", 1);
+  dynamic_obstacle_pub_ =
+    pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/dynamic_obstacles", 1);
 
   image_pub_ = it.advertise("unity/image", 1);
   depth_pub_ = it.advertise("unity/depth", 1);
@@ -158,6 +160,7 @@ void VisionSim::simLoop() {
       }
     }
     publishObstacles(quad_state);
+    publishDynamicObstacles(quad_state);
 
     Scalar sleep_time = 1.0 / real_time_factor_ * sim_dt_ -
                         (ros::WallTime::now() - t_start_sim).toSec();
@@ -215,6 +218,31 @@ void VisionSim::publishObstacles(const QuadState &state) {
     obstacle_msg.obstacles.push_back(single_obstacle);
   }
   obstacle_pub_.publish(obstacle_msg);
+}
+
+
+void VisionSim::publishDynamicObstacles(const QuadState &state) {
+  std::vector<std::shared_ptr<flightlib::UnityObject>> dynamic_objects =
+    vision_env_ptr_->getDynamicObjects();
+
+  envsim_msgs::ObstacleArray obstacle_msg;
+  obstacle_msg.header.stamp = ros::Time(state.t);
+  obstacle_msg.t = state.t;
+  obstacle_msg.num = dynamic_objects.size();
+
+  for (int i = 0; i < int(dynamic_objects.size()); i++) {
+    flightlib::Vector<3> quad_pos = state.p.cast<flightlib::Scalar>();
+    flightlib::Vector<3> relative_pos = dynamic_objects[i]->getPos() - quad_pos;
+
+    envsim_msgs::Obstacle single_obstacle;
+    single_obstacle.position.x = relative_pos.x();
+    single_obstacle.position.y = relative_pos.y();
+    single_obstacle.position.z = relative_pos.z();
+    single_obstacle.scale = dynamic_objects[i]->getScale()[0] / 2.0;
+
+    obstacle_msg.obstacles.push_back(single_obstacle);
+  }
+  dynamic_obstacle_pub_.publish(obstacle_msg);
 }
 
 

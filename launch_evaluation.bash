@@ -104,6 +104,34 @@ wait_for_ros_master() {
   return 0
 }
 
+topic_ready() {
+  rostopic info "$1" >/dev/null 2>&1
+}
+
+wait_for_topic() {
+  topic_name="$1"
+  timeout_s="${2:-40}"
+  start_wait=$(date +%s)
+  while ! topic_ready "$topic_name"
+  do
+    if ((($(date +%s) - start_wait) >= timeout_s))
+    then
+      echo "[LAUNCH SCRIPT] ERROR: Timed out waiting for topic $topic_name"
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+wait_for_sim_topics() {
+  wait_for_topic /kingfisher/dodgeros_pilot/state 45 || return 1
+  wait_for_topic /kingfisher/dodgeros_pilot/groundtruth/obstacles 45 || return 1
+  wait_for_topic /kingfisher/dodgeros_pilot/groundtruth/dynamic_obstacles 45 || return 1
+  wait_for_topic /kingfisher/dodgeros_pilot/unity/depth 45 || return 1
+  return 0
+}
+
 wait_for_process_exit() {
   process_name="$1"
   timeout_s="${2:-10}"
@@ -123,6 +151,7 @@ launch_simulator() {
   if pgrep -x visionsim_node >/dev/null && ros_master_ready
   then
     ROS_PID=""
+    wait_for_sim_topics || return 1
     return 0
   fi
 
@@ -144,6 +173,7 @@ launch_simulator() {
   fi
 
   sleep 10
+  wait_for_sim_topics || return 1
 }
 
 stop_simulator() {
@@ -215,14 +245,6 @@ do
 
   fi
 
-  start_time=$(date +%s)
-
-  # Publish simulator reset
-  rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
-  rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
-  rostopic pub /kingfisher/dodgeros_pilot/enable std_msgs/Bool "data: true" --once
-  rostopic pub /kingfisher/dodgeros_pilot/start std_msgs/Empty "{}" --once
-
   export ROLLOUT_NAME="rollout_""$i"
   echo "$ROLLOUT_NAME"
 
@@ -237,6 +259,15 @@ do
 
   cd -
 
+  wait_for_topic /kingfisher/start_navigation 30 || exit 1
+
+  # Publish simulator reset after the evaluator and controller subscribers exist.
+  rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
+  rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
+  rostopic pub /kingfisher/dodgeros_pilot/enable std_msgs/Bool "data: true" --once
+  rostopic pub /kingfisher/dodgeros_pilot/start std_msgs/Empty "{}" --once
+
+  start_time=$(date +%s)
   sleep 2
 
   # Wait until the evaluation script has finished

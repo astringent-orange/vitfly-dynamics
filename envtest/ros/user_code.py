@@ -15,7 +15,7 @@ sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
 if torch is not None:
     from model import *
 
-from astar_planner import StaticAStarPlanner, default_static_map_path
+from astar_planner import StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
 # sphere determined by a center point (x3, y3, z3) and radius r
@@ -171,6 +171,11 @@ def default_planner_info():
         "avoidance_active": 0,
         "astar_replan_count": 0,
         "astar_success": 0,
+        "astar_plan_time": 0.0,
+        "nearest_obstacle_margin": 0.0,
+        "nearest_static_dist": 0.0,
+        "dynamic_obstacle_count": 0,
+        "v_slowdown_x": 0.0,
     }
 
 
@@ -193,6 +198,10 @@ class AStarDynamicExpert:
         track_max_misses=3,
         max_cmd_accel=5.0,
         cmd_smoothing=0.7,
+        path_cache=None,
+        local_obstacle_safety_radius=2.4,
+        local_static_repulsion_gain=1.8,
+        min_ttc_for_slowdown=1.2,
     ):
         self.static_csv = static_csv or default_static_map_path()
         if not os.path.exists(self.static_csv):
@@ -200,11 +209,11 @@ class AStarDynamicExpert:
                 os.path.dirname(os.path.abspath(__file__)),
                 "../../flightmare/flightpy/configs/vision/spheres_medium/environment_0/static_obstacles.csv",
             )
-        self.planner = StaticAStarPlanner(
-            self.static_csv,
-            resolution=resolution,
-            inflation_radius=inflation_radius,
-        )
+        self.resolution = resolution
+        self.inflation_radius = inflation_radius
+        self.path_cache = path_cache or default_astar_path_cache_path()
+        self.cached_path = self._load_cached_path()
+        self.planner = None
         self.goal = np.asarray(goal, dtype=float)
         self.lookahead_distance = lookahead_distance
         self.dynamic_detection_radius = dynamic_detection_radius
@@ -218,9 +227,13 @@ class AStarDynamicExpert:
         self.track_max_misses = track_max_misses
         self.max_cmd_accel = max_cmd_accel
         self.cmd_smoothing = cmd_smoothing
+        self.local_obstacle_safety_radius = local_obstacle_safety_radius
+        self.local_static_repulsion_gain = local_static_repulsion_gain
+        self.min_ttc_for_slowdown = min_ttc_for_slowdown
         self.path = []
         self.path_index = 0
         self.replan_count = 0
+        self.last_plan_time = 0.0
         self.tracks = []
         self.next_track_id = 1
         self.prev_t = None
@@ -228,6 +241,28 @@ class AStarDynamicExpert:
         self.prev_cmd = None
         self.prev_cmd_t = None
         self.avoidance_latch = False
+
+    def _load_cached_path(self):
+        if not self.path_cache or not os.path.exists(self.path_cache):
+            return []
+        try:
+            path = read_path_csv(self.path_cache)
+        except Exception as exc:
+            print(f"[AStarDynamicExpert] Failed to load cached A* path {self.path_cache}: {exc}")
+            return []
+        if len(path) < 2:
+            return []
+        print(f"[AStarDynamicExpert] Loaded cached A* path with {len(path)} points from {self.path_cache}")
+        return path
+
+    def _planner(self):
+        if self.planner is None:
+            self.planner = StaticAStarPlanner(
+                self.static_csv,
+                resolution=self.resolution,
+                inflation_radius=self.inflation_radius,
+            )
+        return self.planner
 
     def reset_path(self):
         self.path = []
@@ -248,13 +283,23 @@ class AStarDynamicExpert:
 
     def _ensure_path(self, position):
         if len(self.path) == 0:
-            self.path = self.planner.plan(position, self.goal)
-            self.path_index = 0
+            start_time = time.time()
+            if self.cached_path:
+                self.path = [np.asarray(point, dtype=float) for point in self.cached_path]
+                nearest_idx = int(np.argmin([np.linalg.norm(point - position) for point in self.path]))
+                self.path_index = min(nearest_idx, len(self.path) - 1)
+                self.last_plan_time = 0.0
+            else:
+                self.path = self._planner().plan(position, self.goal)
+                self.path_index = 0
+                self.last_plan_time = time.time() - start_time
             self.replan_count += 1
         return len(self.path) > 0
 
     def _relative_obstacle_measurements(self, obstacles):
         rel = []
+        if obstacles is None:
+            return rel
         for obst in obstacles.obstacles:
             pos = np.array([obst.position.x, obst.position.y, obst.position.z], dtype=float)
             if not np.all(np.isfinite(pos)):
@@ -264,7 +309,7 @@ class AStarDynamicExpert:
                 rel.append({"pos": pos, "scale": float(obst.scale)})
         return rel
 
-    def _track_obstacles(self, measurements, t, drone_velocity):
+    def _track_obstacles(self, measurements, t, drone_velocity, require_motion=True):
         if self.prev_t is None or t <= self.prev_t:
             self.tracks = []
             for meas in measurements:
@@ -341,12 +386,13 @@ class AStarDynamicExpert:
             for track in self.tracks
             if track["age"] >= 2
             and track["misses"] == 0
-            and track["world_speed"] >= self.static_speed_threshold
+            and (not require_motion or track["world_speed"] >= self.static_speed_threshold)
         ]
         return dynamic_tracks
 
     def _dynamic_avoidance(self, rel_obstacles):
         v_avoid = np.zeros(3)
+        slowdown_x = 0.0
         nearest_dist = float("inf")
         nearest_rel_speed = 0.0
         ttc_min = float("inf")
@@ -375,6 +421,10 @@ class AStarDynamicExpert:
             if dangerous:
                 raw_active = True
                 ttc_min = min(ttc_min, ttc if np.isfinite(ttc) else self.prediction_horizon)
+                if np.isfinite(ttc) and ttc < self.min_ttc_for_slowdown:
+                    slowdown_x = max(slowdown_x, (self.min_ttc_for_slowdown - ttc) / self.min_ttc_for_slowdown)
+                if closest_dist < safety:
+                    slowdown_x = max(slowdown_x, (safety - closest_dist) / safety)
                 away = -closest / max(np.linalg.norm(closest), 1e-6)
                 away[0] = 0.0
                 if np.linalg.norm(away) < 1e-6:
@@ -410,7 +460,41 @@ class AStarDynamicExpert:
             "nearest_dyn_rel_speed": nearest_rel_speed,
             "ttc_min": ttc_min,
             "avoidance_active": int(self.avoidance_latch),
+            "v_slowdown_x": float(np.clip(slowdown_x, 0.0, 1.0)),
         }
+
+    def _local_obstacle_fallback(self, all_measurements, dynamic_measurements):
+        if not all_measurements:
+            return np.zeros(3), 999.0, 0.0
+
+        dynamic_positions = [dyn["pos"] for dyn in dynamic_measurements]
+        v_local = np.zeros(3)
+        nearest_margin = float("inf")
+        nearest_static_dist = float("inf")
+
+        for meas in all_measurements:
+            pos = meas["pos"]
+            dist = np.linalg.norm(pos)
+            margin = dist - meas["scale"]
+            nearest_margin = min(nearest_margin, margin)
+            is_dynamic = any(np.linalg.norm(pos - dyn_pos) < 0.75 for dyn_pos in dynamic_positions)
+            if not is_dynamic:
+                nearest_static_dist = min(nearest_static_dist, dist)
+
+            safety = self.local_obstacle_safety_radius + meas["scale"]
+            if dist < safety and pos[0] > -0.5:
+                away = -pos / max(dist, 1e-6)
+                away[0] = min(0.0, away[0])
+                if np.linalg.norm(away[1:]) < 1e-6:
+                    away[1] = 1.0
+                strength = self.local_static_repulsion_gain * (safety - dist) / safety
+                v_local += away * strength
+
+        if not np.isfinite(nearest_margin):
+            nearest_margin = 999.0
+        if not np.isfinite(nearest_static_dist):
+            nearest_static_dist = 0.0
+        return limit_norm(v_local, self.max_avoid_speed), nearest_margin, nearest_static_dist
 
     def _lookahead_on_path(self, position):
         if not self.path:
@@ -450,7 +534,7 @@ class AStarDynamicExpert:
         self.prev_cmd_t = t
         return smoothed
 
-    def compute_command(self, state, obstacles, desiredVel):
+    def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
         if pos[0] < 0.5:
             self.reset_path()
@@ -467,16 +551,26 @@ class AStarDynamicExpert:
             v_path = np.array([desiredVel, 0.0, 0.0])
 
         drone_velocity = np.asarray(state.vel, dtype=float)
-        rel_obstacles = self._track_obstacles(self._relative_obstacle_measurements(obstacles), state.t, drone_velocity)
+        all_measurements = self._relative_obstacle_measurements(obstacles)
+        dynamic_measurements = self._relative_obstacle_measurements(dynamic_obstacles) if dynamic_obstacles is not None else all_measurements
+        if dynamic_obstacles is not None:
+            rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=False)
+        else:
+            rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=True)
         v_avoid, avoid_info = self._dynamic_avoidance(rel_obstacles)
-        v_cmd = v_path + v_avoid
+        v_local, nearest_margin, nearest_static_dist = self._local_obstacle_fallback(all_measurements, dynamic_measurements)
+        slowdown = float(np.clip(avoid_info.get("v_slowdown_x", 0.0), 0.0, 1.0))
+        if nearest_margin < self.local_obstacle_safety_radius:
+            slowdown = max(slowdown, (self.local_obstacle_safety_radius - nearest_margin) / self.local_obstacle_safety_radius)
+        v_path[0] *= max(0.15, 1.0 - 0.85 * np.clip(slowdown, 0.0, 1.0))
+        v_cmd = v_path + v_avoid + v_local
 
         if pos[2] < 2.0:
             v_cmd[2] = max(v_cmd[2], (2.0 - pos[2]) * 2.0)
         if pos[0] < 2.0:
             v_cmd[0] = max(1.0, (pos[0] / 2.0) * desiredVel)
         if pos[0] < self.goal[0] - 0.5:
-            v_cmd[0] = max(0.8, v_cmd[0])
+            v_cmd[0] = max(0.8 * max(0.0, 1.0 - slowdown), v_cmd[0])
 
         v_cmd = self._smooth_command(v_cmd, state.t, desiredVel)
 
@@ -494,15 +588,20 @@ class AStarDynamicExpert:
                 "v_avoid_z": v_avoid[2],
                 "astar_replan_count": self.replan_count,
                 "astar_success": int(astar_success),
+                "astar_plan_time": self.last_plan_time,
+                "nearest_obstacle_margin": nearest_margin,
+                "nearest_static_dist": nearest_static_dist,
+                "dynamic_obstacle_count": len(dynamic_measurements),
+                "v_slowdown_x": slowdown,
             }
         )
         info.update(avoid_info)
         return self._make_command(state, v_cmd), info
 
 
-def compute_command_state_based(state, obstacles, desiredVel, rl_policy=None, keyboard=False, keyboard_input='', expert=None, return_info=False):
+def compute_command_state_based(state, obstacles, desiredVel, rl_policy=None, keyboard=False, keyboard_input='', expert=None, return_info=False, dynamic_obstacles=None):
     if expert is not None and not keyboard:
-        command, planner_info = expert.compute_command(state, obstacles, desiredVel)
+        command, planner_info = expert.compute_command(state, obstacles, desiredVel, dynamic_obstacles=dynamic_obstacles)
         return (command, planner_info) if return_info else command
 
     # print("Computing command based on obstacle information!")

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from astar_planner import StaticAStarPlanner, write_path_csv
+
 
 DIFFICULTY_CONFIG = {
     "easy": {"period": (9.0, 12.0), "scale": (0.5, 0.9), "z_amp": (0.2, 0.5)},
@@ -111,6 +113,15 @@ def generate_one(args, env_id):
         )
 
     write_dynamic_yaml(output_dir / "dynamic_obstacles.yaml", objects)
+    planner = StaticAStarPlanner(
+        str(output_dir / "static_obstacles.csv"),
+        resolution=args.astar_resolution,
+        inflation_radius=args.static_inflation,
+    )
+    planned_path = planner.plan(args.astar_start, args.astar_goal)
+    if not planned_path:
+        raise RuntimeError(f"A* failed for {output_dir}")
+    write_path_csv(output_dir / "astar_path.csv", planned_path)
     print(f"[GEN_DYNAMIC_ASTAR] Wrote {args.num_dynamic} dynamic obstacles to {output_dir}")
 
 
@@ -127,6 +138,10 @@ def main():
     parser.add_argument("--source-level", default="spheres_medium")
     parser.add_argument("--env-ids", type=parse_env_ids, default=[0], help="Environment ids, e.g. 0, 0-9, or 0,2,4.")
     parser.add_argument("--dt", type=float, default=0.02)
+    parser.add_argument("--astar-resolution", type=float, default=0.3)
+    parser.add_argument("--static-inflation", type=float, default=0.5)
+    parser.add_argument("--astar-start", type=float, nargs=3, default=[0.0, 0.0, 3.0])
+    parser.add_argument("--astar-goal", type=float, nargs=3, default=[60.0, 0.0, 3.0])
     args = parser.parse_args()
     generate(args)
 

@@ -211,3 +211,25 @@ def default_static_map_path():
             "static_obstacles.csv",
         )
     )
+
+
+def default_astar_path_cache_path():
+    return os.path.join(os.path.dirname(default_static_map_path()), "astar_path.csv")
+
+
+def write_path_csv(path, planned_path):
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["x", "y", "z"])
+        for point in planned_path:
+            point = np.asarray(point, dtype=float)
+            writer.writerow([f"{point[0]:.6f}", f"{point[1]:.6f}", f"{point[2]:.6f}"])
+
+
+def read_path_csv(path):
+    planned_path = []
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            planned_path.append(np.array([float(row["x"]), float(row["y"]), float(row["z"])], dtype=float))
+    return planned_path

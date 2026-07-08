@@ -131,11 +131,12 @@ class Evaluator:
         if not self.is_active:
             return
 
-        obs = msg.obstacles[0]
-        dist = np.linalg.norm(
-            np.array([obs.position.x, obs.position.y, obs.position.z])
+        if not msg.obstacles:
+            return
+        margin = min(
+            np.linalg.norm(np.array([obs.position.x, obs.position.y, obs.position.z])) - obs.scale
+            for obs in msg.obstacles
         )
-        margin = dist - obs.scale
         self.dist.append([msg.header.stamp.to_sec(), margin])
         if margin < 0:
             if not self.hit_obstacle:

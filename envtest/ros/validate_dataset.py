@@ -29,6 +29,11 @@ REQUIRED_COLUMNS = [
     "avoidance_active",
     "astar_replan_count",
     "astar_success",
+    "astar_plan_time",
+    "nearest_obstacle_margin",
+    "nearest_static_dist",
+    "dynamic_obstacle_count",
+    "v_slowdown_x",
 ]
 
 ENV_COLUMNS = ["env_level", "env_folder", "env_seed"]

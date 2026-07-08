@@ -42,6 +42,7 @@ class VisionSim {
   void publishState(const QuadState& state);
   void publishImages(const QuadState& state);
   void publishObstacles(const QuadState& state);
+  void publishDynamicObstacles(const QuadState& state);
 
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber reset_sub_;
@@ -50,6 +51,7 @@ class VisionSim {
   ros::Publisher clock_pub_;
 
   ros::Publisher obstacle_pub_;
+  ros::Publisher dynamic_obstacle_pub_;
 
   image_transport::Publisher image_pub_;
   image_transport::Publisher depth_pub_;

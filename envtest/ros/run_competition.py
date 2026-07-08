@@ -49,6 +49,11 @@ PLANNER_FIELDS = [
     "avoidance_active",
     "astar_replan_count",
     "astar_success",
+    "astar_plan_time",
+    "nearest_obstacle_margin",
+    "nearest_static_dist",
+    "dynamic_obstacle_count",
+    "v_slowdown_x",
 ]
 
 
@@ -63,6 +68,8 @@ class AgilePilotNode:
         self.cv_bridge = CvBridge()
         self.state = None
         self.keyboard = keyboard
+        self.dynamic_obstacles = None
+        self.is_shutting_down = False
 
         quad_name = "kingfisher"
 
@@ -112,7 +119,7 @@ class AgilePilotNode:
         self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
         atexit.register(self.flush_data_log)
-        rospy.on_shutdown(self.flush_data_log)
+        rospy.on_shutdown(self.shutdown_callback)
 
         self.desiredVel = desVel #self.readVel("velocity.txt") #np.random.uniform(low=2.0, high=3.0)
         print()
@@ -189,6 +196,13 @@ class AgilePilotNode:
             "/" + quad_name + "/dodgeros_pilot/groundtruth/obstacles",
             ObstacleArray,
             self.obstacle_callback,
+            queue_size=1,
+            tcp_nodelay=True,
+        )
+        self.dynamic_obstacle_sub = rospy.Subscriber(
+            "/" + quad_name + "/dodgeros_pilot/groundtruth/dynamic_obstacles",
+            ObstacleArray,
+            self.dynamic_obstacle_callback,
             queue_size=1,
             tcp_nodelay=True,
         )
@@ -285,6 +299,11 @@ class AgilePilotNode:
                 self.data_log.to_csv(self.folder + "/data.csv", index=False)
         except Exception as exc:
             print(f"[RUN_COMPETITION] Failed to flush data.csv: {exc}")
+
+    def shutdown_callback(self):
+        self.is_shutting_down = True
+        self.publish_commands = False
+        self.flush_data_log()
 
     def img_callback(self, img_data):
         self.ctr += 1
@@ -390,9 +409,12 @@ class AgilePilotNode:
         self.state = AgileQuadState(state_data)
 
     def obstacle_callback(self, obs_data):
+        if rospy.is_shutdown() or self.is_shutting_down:
+            return
         if self.state is None:
             return
-        self.col = self.if_collide(obs_data.obstacles[0]) if obs_data.obstacles else 0
+        nearest_margin = self.nearest_obstacle_margin(obs_data)
+        self.col = int(nearest_margin < 0.0)
         if self.vision_based:
             return
 
@@ -413,8 +435,10 @@ class AgilePilotNode:
             keyboard_input=self.keyboard_input,
             expert=self.state_expert,
             return_info=True,
+            dynamic_obstacles=self.dynamic_obstacles,
         )
-        self.publish_command(command)
+        if not self.publish_command(command):
+            return
 
         if self.state.pos[0] < 0.1:
             self.start_time = command.t
@@ -452,7 +476,6 @@ class AgilePilotNode:
                     cv2.imwrite(f"{self.debug_rgb_folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
 
                 # Get the collision flag
-                col = self.if_collide(obs_data.obstacles[0]) if obs_data.obstacles else 0
                 ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
                 # Append the data frame
                 # @TODO: This needs to be managed better if the number of datapoints exceeds 10,000
@@ -479,7 +502,7 @@ class AgilePilotNode:
                     br_x,
                     br_y,
                     br_z,
-                    self.col,
+                    int(nearest_margin < 0.0),
                 ] + self.planner_log_values(planner_info)
 
                 # Counter flag for saving the data frame
@@ -488,6 +511,18 @@ class AgilePilotNode:
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 2 == 0 and self.count != 0 or abs(self.state.pos[0] - 20) < 1:
             self.flush_data_log()
+
+    def dynamic_obstacle_callback(self, obs_data):
+        self.dynamic_obstacles = obs_data
+
+    def nearest_obstacle_margin(self, obstacles):
+        if obstacles is None or not obstacles.obstacles:
+            return float("inf")
+        margins = []
+        for obs in obstacles.obstacles:
+            dist = np.linalg.norm(np.array([obs.position.x, obs.position.y, obs.position.z]))
+            margins.append(dist - obs.scale)
+        return float(min(margins)) if margins else float("inf")
 
     def if_collide(self, obs):
         """
@@ -507,6 +542,8 @@ class AgilePilotNode:
         return hit_obstacle
 
     def publish_command(self, command):
+        if rospy.is_shutdown() or self.is_shutting_down or not self.publish_commands:
+            return False
         if command.mode == AgileCommandMode.SRT:
             assert len(command.rotor_thrusts) == 4
             cmd_msg = Command()
@@ -515,8 +552,11 @@ class AgilePilotNode:
             cmd_msg.is_single_rotor_thrust = True
             cmd_msg.thrusts = command.rotor_thrusts
             if self.publish_commands:
-                self.cmd_pub.publish(cmd_msg)
-                return
+                try:
+                    self.cmd_pub.publish(cmd_msg)
+                except rospy.exceptions.ROSException:
+                    return False
+                return True
         elif command.mode == AgileCommandMode.CTBR:
             assert len(command.bodyrates) == 3
             cmd_msg = Command()
@@ -528,8 +568,11 @@ class AgilePilotNode:
             cmd_msg.bodyrates.y = command.bodyrates[1]
             cmd_msg.bodyrates.z = command.bodyrates[2]
             if self.publish_commands:
-                self.cmd_pub.publish(cmd_msg)
-                return
+                try:
+                    self.cmd_pub.publish(cmd_msg)
+                except rospy.exceptions.ROSException:
+                    return False
+                return True
         elif command.mode == AgileCommandMode.LINVEL:
             vel_msg = TwistStamped()
             vel_msg.header.stamp = rospy.Time(command.t)
@@ -540,12 +583,18 @@ class AgilePilotNode:
             vel_msg.twist.angular.y = 0.0
             vel_msg.twist.angular.z = command.yawrate
             if self.publish_commands:
-                self.linvel_pub.publish(vel_msg)
-                return
+                try:
+                    self.linvel_pub.publish(vel_msg)
+                except rospy.exceptions.ROSException:
+                    return False
+                return True
         else:
             assert False, "Unknown command mode specified"
+        return False
 
     def start_callback(self, data):
+        if rospy.is_shutdown() or self.is_shutting_down:
+            return
         print("[RUN_COMPETITION] Start publishing commands!")
         self.publish_commands = True
 

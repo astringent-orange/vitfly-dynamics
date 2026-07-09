@@ -56,6 +56,8 @@ PLANNER_FIELDS = [
     "v_slowdown_x",
     "v_slowdown_dynamic_x",
     "v_slowdown_static_x",
+    "local_fallback_control_enabled",
+    "configured_dynamic_obstacle_count",
 ]
 
 

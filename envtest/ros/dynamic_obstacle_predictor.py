@@ -139,6 +139,9 @@ class DynamicObstacleTrajectoryPredictor:
                     continue
         return times, positions
 
+    def configured_count(self):
+        return len(self.trajectories)
+
     def _topic_world_positions(self, state, dynamic_obstacles_msg):
         if dynamic_obstacles_msg is None:
             return []

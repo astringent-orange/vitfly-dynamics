@@ -155,6 +155,13 @@ def limit_norm(vec, max_norm):
     return vec
 
 
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 def default_planner_info():
     return {
         "lookahead_x": 0.0,
@@ -179,6 +186,8 @@ def default_planner_info():
         "v_slowdown_x": 0.0,
         "v_slowdown_dynamic_x": 0.0,
         "v_slowdown_static_x": 0.0,
+        "local_fallback_control_enabled": 0,
+        "configured_dynamic_obstacle_count": 0,
     }
 
 
@@ -213,6 +222,7 @@ class AStarDynamicExpert:
         min_forward_speed=0.4,
         goal_gate_distance=0.3,
         goal_slowdown_distance=1.5,
+        use_local_fallback_control=None,
     ):
         self.static_csv = static_csv or default_static_map_path()
         if not os.path.exists(self.static_csv):
@@ -249,6 +259,11 @@ class AStarDynamicExpert:
         self.min_forward_speed = min_forward_speed
         self.goal_gate_distance = goal_gate_distance
         self.goal_slowdown_distance = goal_slowdown_distance
+        self.use_local_fallback_control = (
+            env_flag("VITFLY_USE_LOCAL_FALLBACK_CONTROL", False)
+            if use_local_fallback_control is None
+            else bool(use_local_fallback_control)
+        )
         self.path = []
         self.path_index = 0
         self.replan_count = 0
@@ -261,6 +276,11 @@ class AStarDynamicExpert:
         self.prev_cmd_t = None
         self.avoidance_latch = False
         self.dynamic_predictor = self._make_dynamic_predictor()
+        print(
+            "[AStarDynamicExpert] Local fallback control "
+            f"{'enabled' if self.use_local_fallback_control else 'disabled'} "
+            "(diagnostics still logged)"
+        )
 
     def _make_dynamic_predictor(self):
         try:
@@ -424,7 +444,7 @@ class AStarDynamicExpert:
         return dynamic_tracks
 
     def _scene_dynamic_obstacles(self, state, dynamic_obstacles, drone_velocity):
-        if self.dynamic_predictor is None or dynamic_obstacles is None:
+        if self.dynamic_predictor is None:
             return []
         return self.dynamic_predictor.relative_measurements(
             state,
@@ -433,6 +453,11 @@ class AStarDynamicExpert:
             max_distance=self.dynamic_detection_radius,
             forward_only=True,
         )
+
+    def _configured_dynamic_obstacle_count(self):
+        if self.dynamic_predictor is None:
+            return 0
+        return self.dynamic_predictor.configured_count()
 
     def _dynamic_avoidance(self, rel_obstacles):
         v_avoid = np.zeros(3)
@@ -667,9 +692,11 @@ class AStarDynamicExpert:
         else:
             rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=True)
         v_avoid, avoid_info = self._dynamic_avoidance(rel_obstacles)
-        v_local, nearest_margin, nearest_static_dist, static_slowdown = self._local_obstacle_fallback(all_measurements, dynamic_measurements)
+        v_local_diag, nearest_margin, nearest_static_dist, static_slowdown = self._local_obstacle_fallback(all_measurements, dynamic_measurements)
         dynamic_slowdown = float(np.clip(avoid_info.get("v_slowdown_dynamic_x", 0.0), 0.0, 1.0))
-        slowdown = max(dynamic_slowdown, static_slowdown)
+        applied_static_slowdown = static_slowdown if self.use_local_fallback_control else 0.0
+        v_local = v_local_diag if self.use_local_fallback_control else np.zeros(3)
+        slowdown = max(dynamic_slowdown, applied_static_slowdown)
         v_path[0] *= max(0.15, 1.0 - 0.85 * np.clip(slowdown, 0.0, 1.0))
         v_cmd = v_path + v_avoid + v_local
 
@@ -679,9 +706,10 @@ class AStarDynamicExpert:
             v_cmd[0] = max(1.0, (pos[0] / 2.0) * desiredVel)
         remaining_to_goal = self.goal[0] - pos[0]
         ttc_min = float(avoid_info.get("ttc_min", 0.0))
-        critical_stop = nearest_margin < self.danger_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc)
-        forward_cap = self._forward_safety_cap(nearest_margin, ttc_min, desiredVel)
-        v_cmd[0] = min(v_cmd[0], forward_cap)
+        control_margin = nearest_margin if self.use_local_fallback_control else 999.0
+        critical_stop = control_margin < self.danger_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc)
+        forward_cap = self._forward_safety_cap(control_margin, ttc_min, desiredVel)
+        v_cmd[0] = max(0.0, min(v_cmd[0], forward_cap))
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
             v_cmd[0] = max(min_forward, v_cmd[0])
@@ -692,7 +720,7 @@ class AStarDynamicExpert:
             v_cmd[0] = min(v_cmd[0], max_goal_speed)
 
         v_cmd = self._smooth_command(v_cmd, state.t, desiredVel)
-        v_cmd[0] = min(v_cmd[0], forward_cap)
+        v_cmd[0] = max(0.0, min(v_cmd[0], forward_cap))
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
             v_cmd[0] = max(min_forward, v_cmd[0])
@@ -723,6 +751,8 @@ class AStarDynamicExpert:
                 "v_slowdown_x": slowdown,
                 "v_slowdown_dynamic_x": dynamic_slowdown,
                 "v_slowdown_static_x": static_slowdown,
+                "local_fallback_control_enabled": int(self.use_local_fallback_control),
+                "configured_dynamic_obstacle_count": self._configured_dynamic_obstacle_count(),
             }
         )
         info.update(avoid_info)

@@ -219,6 +219,8 @@ class AStarDynamicExpert:
         critical_margin=0.4,
         min_ttc_for_slowdown=1.2,
         critical_ttc=0.5,
+        dynamic_stop_distance=1.15,
+        dynamic_hard_stop_ttc=0.25,
         min_forward_speed=0.4,
         dynamic_min_forward_speed=0.8,
         goal_gate_distance=0.3,
@@ -257,6 +259,8 @@ class AStarDynamicExpert:
         self.critical_margin = critical_margin
         self.min_ttc_for_slowdown = min_ttc_for_slowdown
         self.critical_ttc = critical_ttc
+        self.dynamic_stop_distance = dynamic_stop_distance
+        self.dynamic_hard_stop_ttc = dynamic_hard_stop_ttc
         self.min_forward_speed = min_forward_speed
         self.dynamic_min_forward_speed = dynamic_min_forward_speed
         self.goal_gate_distance = goal_gate_distance
@@ -624,7 +628,12 @@ class AStarDynamicExpert:
         self.prev_cmd_t = t
         return smoothed
 
-    def _forward_safety_cap(self, nearest_margin, ttc_min, desiredVel):
+    def _dynamic_hard_stop(self, nearest_dyn_dist, ttc_min):
+        close_dynamic = nearest_dyn_dist > 0.0 and nearest_dyn_dist < self.dynamic_stop_distance
+        extreme_ttc = ttc_min > 0.0 and ttc_min < self.dynamic_hard_stop_ttc
+        return close_dynamic or extreme_ttc
+
+    def _forward_safety_cap(self, nearest_margin, ttc_min, desiredVel, nearest_dyn_dist=0.0):
         cap = desiredVel
         if nearest_margin < self.critical_margin:
             cap = 0.0
@@ -642,14 +651,20 @@ class AStarDynamicExpert:
             cap = min(cap, desiredVel * (0.2 + 0.6 * float(np.clip(margin_ratio, 0.0, 1.0))))
 
         if ttc_min > 0.0:
-            if ttc_min < self.critical_ttc:
-                cap = 0.0
+            if self._dynamic_hard_stop(nearest_dyn_dist, ttc_min):
+                dynamic_cap = 0.0
             elif ttc_min < self.min_ttc_for_slowdown:
-                ttc_ratio = (ttc_min - self.critical_ttc) / max(
-                    self.min_ttc_for_slowdown - self.critical_ttc,
+                ttc_ratio = (ttc_min - self.dynamic_hard_stop_ttc) / max(
+                    self.min_ttc_for_slowdown - self.dynamic_hard_stop_ttc,
                     1e-6,
                 )
-                cap = min(cap, desiredVel * 0.8 * float(np.clip(ttc_ratio, 0.0, 1.0)))
+                dynamic_cap = max(
+                    self.dynamic_min_forward_speed,
+                    desiredVel * 0.8 * float(np.clip(ttc_ratio, 0.0, 1.0)),
+                )
+            else:
+                dynamic_cap = desiredVel
+            cap = min(cap, dynamic_cap)
         return cap
 
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
@@ -709,13 +724,10 @@ class AStarDynamicExpert:
         remaining_to_goal = self.goal[0] - pos[0]
         ttc_min = float(avoid_info.get("ttc_min", 0.0))
         nearest_dyn_dist = float(avoid_info.get("nearest_dyn_dist", 0.0))
-        dynamic_critical = (
-            (ttc_min > 0.0 and ttc_min < self.critical_ttc)
-            or (nearest_dyn_dist > 0.0 and nearest_dyn_dist < self.dynamic_safety_radius)
-        )
+        dynamic_critical = self._dynamic_hard_stop(nearest_dyn_dist, ttc_min)
         control_margin = nearest_margin if self.use_local_fallback_control else 999.0
         critical_stop = control_margin < self.danger_margin or dynamic_critical
-        forward_cap = self._forward_safety_cap(control_margin, ttc_min, desiredVel)
+        forward_cap = self._forward_safety_cap(control_margin, ttc_min, desiredVel, nearest_dyn_dist)
         v_cmd[0] = max(0.0, min(v_cmd[0], forward_cap))
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed

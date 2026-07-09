@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+DEFAULT_STATIC_INFLATION = 0.8
+
 
 @dataclass
 class StaticObstacle:
@@ -19,7 +21,7 @@ class StaticAStarPlanner:
         self,
         static_csv,
         resolution=0.3,
-        inflation_radius=0.5,
+        inflation_radius=DEFAULT_STATIC_INFLATION,
         bounds=((0.0, 62.0), (-9.5, 9.5), (1.0, 8.0)),
     ):
         self.static_csv = static_csv
@@ -219,7 +221,7 @@ def default_astar_path_cache_path():
 
 def write_path_csv(path, planned_path):
     with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         writer.writerow(["x", "y", "z"])
         for point in planned_path:
             point = np.asarray(point, dtype=float)

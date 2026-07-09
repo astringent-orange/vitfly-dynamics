@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from astar_planner import StaticAStarPlanner, write_path_csv
+from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, write_path_csv
 
 
 DIFFICULTY_CONFIG = {
@@ -139,7 +139,7 @@ def main():
     parser.add_argument("--env-ids", type=parse_env_ids, default=[0], help="Environment ids, e.g. 0, 0-9, or 0,2,4.")
     parser.add_argument("--dt", type=float, default=0.02)
     parser.add_argument("--astar-resolution", type=float, default=0.3)
-    parser.add_argument("--static-inflation", type=float, default=0.5)
+    parser.add_argument("--static-inflation", type=float, default=DEFAULT_STATIC_INFLATION)
     parser.add_argument("--astar-start", type=float, nargs=3, default=[0.0, 0.0, 3.0])
     parser.add_argument("--astar-goal", type=float, nargs=3, default=[60.0, 0.0, 3.0])
     args = parser.parse_args()

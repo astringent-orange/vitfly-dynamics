@@ -15,7 +15,7 @@ sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
 if torch is not None:
     from model import *
 
-from astar_planner import StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
+from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
@@ -196,7 +196,7 @@ class AStarDynamicExpert:
         self,
         static_csv=None,
         resolution=0.3,
-        inflation_radius=0.5,
+        inflation_radius=DEFAULT_STATIC_INFLATION,
         goal=(60.0, 0.0, 3.0),
         lookahead_distance=4.5,
         dynamic_detection_radius=8.0,

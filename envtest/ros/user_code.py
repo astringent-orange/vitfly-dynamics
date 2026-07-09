@@ -199,9 +199,9 @@ class AStarDynamicExpert:
         inflation_radius=DEFAULT_STATIC_INFLATION,
         goal=(60.0, 0.0, 3.0),
         lookahead_distance=4.5,
-        dynamic_detection_radius=8.0,
-        prediction_horizon=3.0,
-        dynamic_safety_radius=2.2,
+        dynamic_detection_radius=6.0,
+        prediction_horizon=2.0,
+        dynamic_safety_radius=1.6,
         repulsion_gain=2.4,
         max_avoid_speed=1.8,
         smoothing=0.65,
@@ -217,9 +217,10 @@ class AStarDynamicExpert:
         caution_margin=2.0,
         danger_margin=1.0,
         critical_margin=0.4,
-        min_ttc_for_slowdown=1.8,
-        critical_ttc=0.8,
+        min_ttc_for_slowdown=1.2,
+        critical_ttc=0.5,
         min_forward_speed=0.4,
+        dynamic_min_forward_speed=0.8,
         goal_gate_distance=0.3,
         goal_slowdown_distance=1.5,
         use_local_fallback_control=None,
@@ -257,6 +258,7 @@ class AStarDynamicExpert:
         self.min_ttc_for_slowdown = min_ttc_for_slowdown
         self.critical_ttc = critical_ttc
         self.min_forward_speed = min_forward_speed
+        self.dynamic_min_forward_speed = dynamic_min_forward_speed
         self.goal_gate_distance = goal_gate_distance
         self.goal_slowdown_distance = goal_slowdown_distance
         self.use_local_fallback_control = (
@@ -706,12 +708,19 @@ class AStarDynamicExpert:
             v_cmd[0] = max(1.0, (pos[0] / 2.0) * desiredVel)
         remaining_to_goal = self.goal[0] - pos[0]
         ttc_min = float(avoid_info.get("ttc_min", 0.0))
+        nearest_dyn_dist = float(avoid_info.get("nearest_dyn_dist", 0.0))
+        dynamic_critical = (
+            (ttc_min > 0.0 and ttc_min < self.critical_ttc)
+            or (nearest_dyn_dist > 0.0 and nearest_dyn_dist < self.dynamic_safety_radius)
+        )
         control_margin = nearest_margin if self.use_local_fallback_control else 999.0
-        critical_stop = control_margin < self.danger_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc)
+        critical_stop = control_margin < self.danger_margin or dynamic_critical
         forward_cap = self._forward_safety_cap(control_margin, ttc_min, desiredVel)
         v_cmd[0] = max(0.0, min(v_cmd[0], forward_cap))
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
+            if dynamic_slowdown > 0.01 and not dynamic_critical:
+                min_forward = max(min_forward, self.dynamic_min_forward_speed)
             v_cmd[0] = max(min_forward, v_cmd[0])
         else:
             v_cmd[0] = max(0.0, v_cmd[0])
@@ -723,6 +732,8 @@ class AStarDynamicExpert:
         v_cmd[0] = max(0.0, min(v_cmd[0], forward_cap))
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
+            if dynamic_slowdown > 0.01 and not dynamic_critical:
+                min_forward = max(min_forward, self.dynamic_min_forward_speed)
             v_cmd[0] = max(min_forward, v_cmd[0])
         else:
             v_cmd[0] = max(0.0, v_cmd[0])

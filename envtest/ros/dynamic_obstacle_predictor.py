@@ -19,14 +19,17 @@ def _state_pos(state):
 
 
 class DynamicTrajectory:
-    def __init__(self, name, times, positions, scale, loop=True):
+    def __init__(self, name, times, positions, scale, loop=True, max_reasonable_speed=8.0):
         self.name = name
         self.times = np.asarray(times, dtype=float)
         self.positions = np.asarray(positions, dtype=float)
         self.scale = float(scale)
         self.loop = bool(loop)
+        self.max_reasonable_speed = float(max_reasonable_speed)
         self.period = float(self.times[-1]) if len(self.times) else 0.0
         self.dt = self._median_dt()
+        self.segment_velocities = self._segment_velocities()
+        self.fallback_velocity = self._fallback_velocity()
 
     def _median_dt(self):
         if len(self.times) < 2:
@@ -36,6 +39,25 @@ class DynamicTrajectory:
         if len(diffs) == 0:
             return 0.02
         return float(np.median(diffs))
+
+    def _segment_velocities(self):
+        if len(self.times) < 2:
+            return np.zeros((0, 3))
+        dt = np.diff(self.times)
+        dp = np.diff(self.positions, axis=0)
+        velocities = np.zeros_like(dp)
+        valid = dt > 1e-6
+        velocities[valid] = dp[valid] / dt[valid, None]
+        return velocities
+
+    def _fallback_velocity(self):
+        if len(self.segment_velocities) == 0:
+            return np.zeros(3)
+        speeds = np.linalg.norm(self.segment_velocities, axis=1)
+        valid = np.isfinite(speeds) & (speeds <= self.max_reasonable_speed)
+        if np.any(valid):
+            return np.median(self.segment_velocities[valid], axis=0)
+        return np.zeros(3)
 
     def _normalize_phase(self, phase):
         if self.period <= 0.0:
@@ -59,12 +81,15 @@ class DynamicTrajectory:
         )
 
     def velocity_at(self, phase):
-        if len(self.positions) < 2 or self.period <= 0.0:
+        if len(self.segment_velocities) == 0 or self.period <= 0.0:
             return np.zeros(3)
-        eps = max(self.dt, 1e-3)
-        before = self.position_at(phase - eps)
-        after = self.position_at(phase + eps)
-        return (after - before) / (2.0 * eps)
+        phase = self._normalize_phase(phase)
+        idx = int(np.searchsorted(self.times, phase, side="right") - 1)
+        idx = int(np.clip(idx, 0, len(self.segment_velocities) - 1))
+        velocity = self.segment_velocities[idx]
+        if not np.all(np.isfinite(velocity)) or np.linalg.norm(velocity) > self.max_reasonable_speed:
+            return self.fallback_velocity.copy()
+        return velocity.copy()
 
     def closest_phase(self, world_pos):
         if len(self.positions) == 0:

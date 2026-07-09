@@ -16,6 +16,7 @@ if torch is not None:
     from model import *
 
 from astar_planner import StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
+from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
 # sphere determined by a center point (x3, y3, z3) and radius r
@@ -259,6 +260,16 @@ class AStarDynamicExpert:
         self.prev_cmd = None
         self.prev_cmd_t = None
         self.avoidance_latch = False
+        self.dynamic_predictor = self._make_dynamic_predictor()
+
+    def _make_dynamic_predictor(self):
+        try:
+            env_dir = os.path.dirname(os.path.abspath(self.static_csv))
+            predictor = DynamicObstacleTrajectoryPredictor(env_dir)
+            return predictor if predictor.loaded else None
+        except Exception as exc:
+            print(f"[AStarDynamicExpert] Dynamic trajectory predictor disabled: {exc}")
+            return None
 
     def _load_cached_path(self):
         if not self.path_cache or not os.path.exists(self.path_cache):
@@ -411,6 +422,17 @@ class AStarDynamicExpert:
             and (not require_motion or track["world_speed"] >= self.static_speed_threshold)
         ]
         return dynamic_tracks
+
+    def _scene_dynamic_obstacles(self, state, dynamic_obstacles, drone_velocity):
+        if self.dynamic_predictor is None or dynamic_obstacles is None:
+            return []
+        return self.dynamic_predictor.relative_measurements(
+            state,
+            dynamic_obstacles,
+            drone_velocity,
+            max_distance=self.dynamic_detection_radius,
+            forward_only=True,
+        )
 
     def _dynamic_avoidance(self, rel_obstacles):
         v_avoid = np.zeros(3)
@@ -637,7 +659,10 @@ class AStarDynamicExpert:
             if dynamic_obstacles is not None
             else self._relative_obstacle_measurements(obstacles, max_distance=self.dynamic_detection_radius, forward_only=True)
         )
-        if dynamic_obstacles is not None:
+        scene_rel_obstacles = self._scene_dynamic_obstacles(state, dynamic_obstacles, drone_velocity)
+        if scene_rel_obstacles:
+            rel_obstacles = scene_rel_obstacles
+        elif dynamic_obstacles is not None:
             rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=False)
         else:
             rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=True)

@@ -108,6 +108,7 @@ def validate_trajectory(
         else:
             if post_goal_rows > max_post_goal_rows:
                 errors.append(f"{path}: post-goal rows {post_goal_rows} > {max_post_goal_rows}")
+    collision_rows = 0
     if "is_collide" in fieldnames:
         try:
             collision_rows = sum(1 for row in rows if int(float(row["is_collide"])) != 0)
@@ -124,6 +125,18 @@ def validate_trajectory(
         else:
             if margins and min(margins) < min_nearest_margin:
                 errors.append(f"{path}: min nearest_obstacle_margin {min(margins):.3f} < {min_nearest_margin:.3f}")
+    if {"is_collide", "nearest_obstacle_margin"}.issubset(fieldnames):
+        try:
+            mismatch_rows = sum(
+                1
+                for row in rows
+                if int(float(row["is_collide"])) != 0 and float(row["nearest_obstacle_margin"]) >= 0.0
+            )
+        except ValueError:
+            errors.append(f"{path}: invalid collision/margin values")
+        else:
+            if mismatch_rows:
+                errors.append(f"{path}: collision/margin mismatch rows {mismatch_rows}")
     astar_success = 0
     if "astar_success" in fieldnames:
         astar_success = sum(int(float(row["astar_success"])) for row in rows if row.get("astar_success", "") != "")

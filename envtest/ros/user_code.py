@@ -201,14 +201,14 @@ class AStarDynamicExpert:
         max_cmd_accel=5.0,
         cmd_smoothing=0.7,
         path_cache=None,
-        local_obstacle_safety_radius=3.0,
+        local_obstacle_safety_radius=3.5,
         local_static_repulsion_gain=2.6,
-        local_obstacle_slow_radius=1.5,
-        caution_margin=1.2,
-        danger_margin=0.6,
-        critical_margin=0.25,
-        min_ttc_for_slowdown=1.2,
-        critical_ttc=0.4,
+        local_obstacle_slow_radius=2.2,
+        caution_margin=2.0,
+        danger_margin=1.0,
+        critical_margin=0.4,
+        min_ttc_for_slowdown=1.8,
+        critical_ttc=0.8,
         min_forward_speed=0.4,
         goal_gate_distance=0.3,
         goal_slowdown_distance=1.5,
@@ -314,17 +314,21 @@ class AStarDynamicExpert:
             self.replan_count += 1
         return len(self.path) > 0
 
-    def _relative_obstacle_measurements(self, obstacles):
+    def _relative_obstacle_measurements(self, obstacles, max_distance="dynamic", forward_only=True):
         rel = []
         if obstacles is None:
             return rel
+        max_distance = self.dynamic_detection_radius if max_distance == "dynamic" else max_distance
         for obst in obstacles.obstacles:
             pos = np.array([obst.position.x, obst.position.y, obst.position.z], dtype=float)
             if not np.all(np.isfinite(pos)):
                 continue
             dist = np.linalg.norm(pos)
-            if dist <= self.dynamic_detection_radius and pos[0] > -1.0:
-                rel.append({"pos": pos, "scale": float(obst.scale)})
+            if max_distance is not None and dist > max_distance:
+                continue
+            if forward_only and pos[0] <= -1.0:
+                continue
+            rel.append({"pos": pos, "scale": float(obst.scale)})
         return rel
 
     def _track_obstacles(self, measurements, t, drone_velocity, require_motion=True):
@@ -572,15 +576,32 @@ class AStarDynamicExpert:
         return smoothed
 
     def _forward_safety_cap(self, nearest_margin, ttc_min, desiredVel):
-        if nearest_margin < self.critical_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc):
-            return 0.0
-        if nearest_margin < self.danger_margin:
+        cap = desiredVel
+        if nearest_margin < self.critical_margin:
+            cap = 0.0
+        elif nearest_margin < self.danger_margin:
             margin_ratio = (nearest_margin - self.critical_margin) / max(
                 self.danger_margin - self.critical_margin,
                 1e-6,
             )
-            return desiredVel * 0.2 * float(np.clip(margin_ratio, 0.0, 1.0))
-        return desiredVel
+            cap = min(cap, desiredVel * 0.2 * float(np.clip(margin_ratio, 0.0, 1.0)))
+        elif nearest_margin < self.caution_margin:
+            margin_ratio = (nearest_margin - self.danger_margin) / max(
+                self.caution_margin - self.danger_margin,
+                1e-6,
+            )
+            cap = min(cap, desiredVel * (0.2 + 0.6 * float(np.clip(margin_ratio, 0.0, 1.0))))
+
+        if ttc_min > 0.0:
+            if ttc_min < self.critical_ttc:
+                cap = 0.0
+            elif ttc_min < self.min_ttc_for_slowdown:
+                ttc_ratio = (ttc_min - self.critical_ttc) / max(
+                    self.min_ttc_for_slowdown - self.critical_ttc,
+                    1e-6,
+                )
+                cap = min(cap, desiredVel * 0.8 * float(np.clip(ttc_ratio, 0.0, 1.0)))
+        return cap
 
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
@@ -610,8 +631,12 @@ class AStarDynamicExpert:
             v_path = np.array([desiredVel, 0.0, 0.0])
 
         drone_velocity = np.asarray(state.vel, dtype=float)
-        all_measurements = self._relative_obstacle_measurements(obstacles)
-        dynamic_measurements = self._relative_obstacle_measurements(dynamic_obstacles) if dynamic_obstacles is not None else all_measurements
+        all_measurements = self._relative_obstacle_measurements(obstacles, max_distance=None, forward_only=False)
+        dynamic_measurements = (
+            self._relative_obstacle_measurements(dynamic_obstacles, max_distance=self.dynamic_detection_radius, forward_only=True)
+            if dynamic_obstacles is not None
+            else self._relative_obstacle_measurements(obstacles, max_distance=self.dynamic_detection_radius, forward_only=True)
+        )
         if dynamic_obstacles is not None:
             rel_obstacles = self._track_obstacles(dynamic_measurements, state.t, drone_velocity, require_motion=False)
         else:

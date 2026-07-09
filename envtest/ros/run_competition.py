@@ -305,9 +305,36 @@ class AgilePilotNode:
             info.update(planner_info)
         return [info[field] for field in PLANNER_FIELDS]
 
+    def sanitize_data_log(self):
+        if not hasattr(self, "data_log") or self.data_log.empty:
+            return
+        before_timestamps = {str(ts) for ts in self.data_log["timestamp"].tolist()}
+        cleaned = self.data_log.drop_duplicates(subset=["timestamp"], keep="first")
+        if "pos_x" in cleaned.columns:
+            pos_x = pd.to_numeric(cleaned["pos_x"], errors="coerce")
+            cleaned = cleaned[pos_x < self.data_collection_xrange[1]]
+
+        kept_timestamps = {str(ts) for ts in cleaned["timestamp"].tolist()}
+        for timestamp in before_timestamps - kept_timestamps:
+            image_path = f"{self.folder}/{timestamp}.png"
+            if os.path.exists(image_path):
+                try:
+                    os.remove(image_path)
+                except OSError as exc:
+                    print(f"[RUN_COMPETITION] Failed to remove dropped image {image_path}: {exc}")
+
+        self.data_log = cleaned.reset_index(drop=True)
+        self.saved_timestamps = set()
+        for timestamp in self.data_log["timestamp"].tolist():
+            try:
+                self.saved_timestamps.add(float(timestamp))
+            except (TypeError, ValueError):
+                pass
+
     def flush_data_log(self):
         try:
             if hasattr(self, "folder") and hasattr(self, "data_log"):
+                self.sanitize_data_log()
                 self.data_log.to_csv(self.folder + "/data.csv", index=False)
         except Exception as exc:
             print(f"[RUN_COMPETITION] Failed to flush data.csv: {exc}")
@@ -317,8 +344,9 @@ class AgilePilotNode:
         self.publish_commands = False
         self.flush_data_log()
 
-    def reached_goal(self):
-        return self.state is not None and self.state.pos[0] >= self.data_collection_xrange[1]
+    def reached_goal(self, state=None):
+        state = state if state is not None else self.state
+        return state is not None and state.pos[0] >= self.data_collection_xrange[1]
 
     def publish_zero_velocity(self):
         if not hasattr(self, "linvel_pub"):
@@ -346,16 +374,16 @@ class AgilePilotNode:
         self.flush_data_log()
         rospy.signal_shutdown(reason)
 
-    def try_log_sample(self, command, planner_info=None, nearest_margin=None):
-        if self.finished or self.state is None or self.last_valid_img is None:
+    def try_log_sample(self, command, state_snapshot, planner_info=None, nearest_margin=None):
+        if self.finished or state_snapshot is None or self.last_valid_img is None:
             return False
-        if self.state.pos[0] >= self.data_collection_xrange[1]:
+        if state_snapshot.pos[0] >= self.data_collection_xrange[1]:
             self.finish_run("Reached goal")
             return False
-        if self.state.pos[0] <= self.data_collection_xrange[0]:
+        if state_snapshot.pos[0] <= self.data_collection_xrange[0]:
             return False
 
-        timestamp = round(self.state.t, 3)
+        timestamp = round(state_snapshot.t, 3)
         if timestamp in self.saved_timestamps:
             return False
 
@@ -378,16 +406,16 @@ class AgilePilotNode:
             self.env_level,
             self.env_folder,
             self.env_seed,
-            self.state.att[0],
-            self.state.att[1],
-            self.state.att[2],
-            self.state.att[3],
-            self.state.pos[0],
-            self.state.pos[1],
-            self.state.pos[2],
-            self.state.vel[0],
-            self.state.vel[1],
-            self.state.vel[2],
+            state_snapshot.att[0],
+            state_snapshot.att[1],
+            state_snapshot.att[2],
+            state_snapshot.att[3],
+            state_snapshot.pos[0],
+            state_snapshot.pos[1],
+            state_snapshot.pos[2],
+            state_snapshot.vel[0],
+            state_snapshot.vel[1],
+            state_snapshot.vel[2],
             command.velocity[0],
             command.velocity[1],
             command.velocity[2],
@@ -399,8 +427,8 @@ class AgilePilotNode:
         ] + self.planner_log_values(planner_info)
 
         self.saved_timestamps.add(timestamp)
-        self.last_saved_state_t = self.state.t
-        self.t1 = self.state.t
+        self.last_saved_state_t = state_snapshot.t
+        self.t1 = state_snapshot.t
         self.count += 1
         return True
 
@@ -427,14 +455,15 @@ class AgilePilotNode:
         
         if self.state is None:
             return
-        if self.reached_goal():
+        state_snapshot = deepcopy(self.state)
+        if self.reached_goal(state_snapshot):
             self.finish_run("Reached goal")
             return
         
         # print('[RUN_COMPETITION] calling compute_command_vision_based')
         start_compute_time = time.time()
 
-        command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(self.state, img, self.prevImg,self.desiredVel, self.model, self.model_hidden_state)
+        command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(state_snapshot, img, self.prevImg,self.desiredVel, self.model, self.model_hidden_state)
 
         # publish debug images
         self.debug_img1_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img1, encoding="passthrough"))
@@ -446,18 +475,18 @@ class AgilePilotNode:
         self.publish_command(command)
         # print(f'[RUN_COMPETITION] output: {command.velocity}')
 
-        if self.state.pos[0] < 0.1:
+        if state_snapshot.pos[0] < 0.1:
             self.start_time = command.t
 
-        if self.state.pos[0] >= 60 and self.logged_time_flag == 0:
+        if state_snapshot.pos[0] >= 60 and self.logged_time_flag == 0:
             file = "timeTaken.dat"
             with open(file, "a") as file:
                 file.write(str(float(command.t - self.start_time))+"\n")
             self.logged_time_flag = 1
         
         #if we exceed the time interval then save the data
-        if self.state.t - self.t1 > self.time_interval or self.t1 == 0:
-            self.try_log_sample(command, None, None)
+        if state_snapshot.t - self.t1 > self.time_interval or self.t1 == 0:
+            self.try_log_sample(command, state_snapshot, None, None)
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 5 == 0 and self.count != 0:
@@ -473,7 +502,8 @@ class AgilePilotNode:
             return
         if self.state is None:
             return
-        if self.reached_goal():
+        state_snapshot = deepcopy(self.state)
+        if self.reached_goal(state_snapshot):
             self.finish_run("Reached goal")
             return
         nearest_margin = self.nearest_obstacle_margin(obs_data)
@@ -490,7 +520,7 @@ class AgilePilotNode:
             self.keyboard_input = ''
 
         command, planner_info = compute_command_state_based(
-            state=self.state,
+            state=state_snapshot,
             obstacles=obs_data,
             desiredVel=self.desiredVel,
             rl_policy=self.rl_policy,
@@ -503,23 +533,23 @@ class AgilePilotNode:
         if not self.publish_command(command):
             return
 
-        if self.state.pos[0] < 0.1:
+        if state_snapshot.pos[0] < 0.1:
             self.start_time = command.t
-        if self.state.pos[0] >= 60 and self.logged_time_flag == 0:
+        if state_snapshot.pos[0] >= 60 and self.logged_time_flag == 0:
             file = "timeTaken.dat"
             with open(file, "a") as file:
                 file.write(str(float(command.t - self.start_time))+"\n")
             self.logged_time_flag = 1
         
         # if we exceed the time interval then save the data
-        if (self.state.t - self.t1 > self.time_interval or self.t1 == 0) and (self.state.pos[2] > 2.95 or self.init == 1):
+        if (state_snapshot.t - self.t1 > self.time_interval or self.t1 == 0) and (state_snapshot.pos[2] > 2.95 or self.init == 1):
             
             self.init = 1
 
-            self.try_log_sample(command, planner_info, nearest_margin)
+            self.try_log_sample(command, state_snapshot, planner_info, nearest_margin)
 
         # Save once every 10 instances - writing every instance can be expensive
-        if self.count % 2 == 0 and self.count != 0 or abs(self.state.pos[0] - 20) < 1:
+        if self.count % 2 == 0 and self.count != 0 or abs(state_snapshot.pos[0] - 20) < 1:
             self.flush_data_log()
 
     def dynamic_obstacle_callback(self, obs_data):

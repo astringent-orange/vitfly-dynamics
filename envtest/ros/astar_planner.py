@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 DEFAULT_STATIC_INFLATION = 0.8
+DEFAULT_SEGMENT_CLEARANCE = 0.02
 
 
 @dataclass
@@ -22,11 +23,13 @@ class StaticAStarPlanner:
         static_csv,
         resolution=0.3,
         inflation_radius=DEFAULT_STATIC_INFLATION,
+        segment_clearance=DEFAULT_SEGMENT_CLEARANCE,
         bounds=((0.0, 62.0), (-9.5, 9.5), (1.0, 8.0)),
     ):
         self.static_csv = static_csv
         self.resolution = float(resolution)
         self.inflation_radius = float(inflation_radius)
+        self.segment_clearance = float(segment_clearance)
         self.bounds = np.array(bounds, dtype=float)
         self.origin = self.bounds[:, 0]
         self.shape = np.floor((self.bounds[:, 1] - self.bounds[:, 0]) / self.resolution).astype(int) + 1
@@ -55,15 +58,16 @@ class StaticAStarPlanner:
 
         yy, zz = np.meshgrid(ys, zs, indexing="ij")
         for obstacle in self.obstacles:
-            min_idx = self.world_to_grid(obstacle.center - obstacle.radius)
-            max_idx = self.world_to_grid(obstacle.center + obstacle.radius)
+            occupancy_radius = obstacle.radius + self.segment_clearance
+            min_idx = self.world_to_grid(obstacle.center - occupancy_radius)
+            max_idx = self.world_to_grid(obstacle.center + occupancy_radius)
             min_idx = np.maximum(min_idx, 0)
             max_idx = np.minimum(max_idx, self.shape - 1)
             for ix in range(min_idx[0], max_idx[0] + 1):
                 dx2 = (xs[ix] - obstacle.center[0]) ** 2
                 y_slice = yy[min_idx[1] : max_idx[1] + 1, min_idx[2] : max_idx[2] + 1]
                 z_slice = zz[min_idx[1] : max_idx[1] + 1, min_idx[2] : max_idx[2] + 1]
-                occupied = dx2 + (y_slice - obstacle.center[1]) ** 2 + (z_slice - obstacle.center[2]) ** 2 <= obstacle.radius**2
+                occupied = dx2 + (y_slice - obstacle.center[1]) ** 2 + (z_slice - obstacle.center[2]) ** 2 <= occupancy_radius**2
                 occupancy[ix, min_idx[1] : max_idx[1] + 1, min_idx[2] : max_idx[2] + 1] |= occupied
         return occupancy
 
@@ -161,18 +165,41 @@ class StaticAStarPlanner:
                 return False
         return True
 
+    def segment_margin(self, start, end):
+        start = np.asarray(start, dtype=float)
+        end = np.asarray(end, dtype=float)
+        segment = end - start
+        length2 = float(np.dot(segment, segment))
+        min_margin = float("inf")
+        for obstacle in self.obstacles:
+            if length2 <= 1e-12:
+                closest = start
+            else:
+                alpha = float(np.dot(obstacle.center - start, segment) / length2)
+                alpha = float(np.clip(alpha, 0.0, 1.0))
+                closest = start + alpha * segment
+            margin = float(np.linalg.norm(closest - obstacle.center) - obstacle.radius)
+            min_margin = min(min_margin, margin)
+        return min_margin if np.isfinite(min_margin) else float("inf")
+
+    def segment_has_clearance(self, start, end):
+        return self.segment_is_free(start, end) and self.segment_margin(start, end) >= self.segment_clearance - 1e-9
+
     def simplify_path(self, path):
         if len(path) <= 2:
             return [np.asarray(p, dtype=float) for p in path]
         simplified = [np.asarray(path[0], dtype=float)]
         anchor = 0
-        probe = 2
-        while probe < len(path):
-            if not self.segment_is_free(path[anchor], path[probe]):
-                simplified.append(np.asarray(path[probe - 1], dtype=float))
-                anchor = probe - 1
-            probe += 1
-        simplified.append(np.asarray(path[-1], dtype=float))
+        while anchor < len(path) - 1:
+            best = anchor + 1
+            probe = anchor + 2
+            while probe < len(path):
+                if not self.segment_has_clearance(path[anchor], path[probe]):
+                    break
+                best = probe
+                probe += 1
+            simplified.append(np.asarray(path[best], dtype=float))
+            anchor = best
         return simplified
 
     def first_lookahead(self, path, position, lookahead_distance=3.0):

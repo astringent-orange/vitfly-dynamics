@@ -198,7 +198,7 @@ class AStarDynamicExpert:
         resolution=0.3,
         inflation_radius=DEFAULT_STATIC_INFLATION,
         goal=(60.0, 0.0, 3.0),
-        lookahead_distance=4.5,
+        lookahead_distance=3.5,
         dynamic_detection_radius=6.0,
         prediction_horizon=2.0,
         dynamic_safety_radius=1.6,

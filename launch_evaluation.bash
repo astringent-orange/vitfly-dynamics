@@ -16,6 +16,7 @@ fixed_env=0
 force_rviz=0
 env_count="${VITFLY_ENV_COUNT:-10}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
+des_vel="${VITFLY_DES_VEL:-5.0}"
 
 for arg in "${@:3}"
 do
@@ -272,7 +273,7 @@ do
   python3 evaluation_node.py ${datetime}_N$i &
   PY_PID="$!"
 
-  python3 run_competition.py $run_competition_args --des_vel 5.0 --model_type "ViTLSTM" --model_path ../../models/ViTLSTM_model.pth &
+  python3 run_competition.py $run_competition_args --des_vel "$des_vel" --model_type "ViTLSTM" --model_path ../../models/ViTLSTM_model.pth &
   COMP_PID="$!"
   # python3 run_competition.py $run_competition_args --des_vel 5.0 --model_type "ViTLSTM" --model_path ../../models/model_000396.pth &
   # COMP_PID="$!"

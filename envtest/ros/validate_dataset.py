@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import argparse
+from collections import Counter
 import csv
 import glob
 import os
@@ -47,6 +48,8 @@ def validate_trajectory(
     max_post_goal_rows=0,
     max_negative_xcmd_rows=0,
     max_low_speed_ratio=0.15,
+    max_collision_rows=0,
+    min_nearest_margin=0.0,
 ):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
@@ -67,6 +70,12 @@ def validate_trajectory(
         errors.append(f"{path}: missing env columns {missing_env}")
     if rgb_pngs:
         errors.append(f"{path}: found RGB debug PNGs in trajectory root")
+    timestamps = [row.get("timestamp", "") for row in rows]
+    duplicate_timestamps = {ts: count for ts, count in Counter(timestamps).items() if ts and count > 1}
+    if duplicate_timestamps:
+        duplicate_rows = sum(count - 1 for count in duplicate_timestamps.values())
+        sample = sorted(duplicate_timestamps.items())[:5]
+        errors.append(f"{path}: duplicate timestamp rows {duplicate_rows}, sample {sample}")
     if len(depth_pngs) != len(rows):
         errors.append(f"{path}: png count {len(depth_pngs)} != csv rows {len(rows)}")
     if len(depth_pngs) > 0:
@@ -99,6 +108,22 @@ def validate_trajectory(
         else:
             if post_goal_rows > max_post_goal_rows:
                 errors.append(f"{path}: post-goal rows {post_goal_rows} > {max_post_goal_rows}")
+    if "is_collide" in fieldnames:
+        try:
+            collision_rows = sum(1 for row in rows if int(float(row["is_collide"])) != 0)
+        except ValueError:
+            errors.append(f"{path}: invalid is_collide")
+        else:
+            if collision_rows > max_collision_rows:
+                errors.append(f"{path}: collision rows {collision_rows} > {max_collision_rows}")
+    if "nearest_obstacle_margin" in fieldnames:
+        try:
+            margins = [float(row["nearest_obstacle_margin"]) for row in rows if row.get("nearest_obstacle_margin", "") != ""]
+        except ValueError:
+            errors.append(f"{path}: invalid nearest_obstacle_margin")
+        else:
+            if margins and min(margins) < min_nearest_margin:
+                errors.append(f"{path}: min nearest_obstacle_margin {min(margins):.3f} < {min_nearest_margin:.3f}")
     astar_success = 0
     if "astar_success" in fieldnames:
         astar_success = sum(int(float(row["astar_success"])) for row in rows if row.get("astar_success", "") != "")
@@ -121,6 +146,8 @@ def main():
     parser.add_argument("--max-post-goal-rows", type=int, default=0)
     parser.add_argument("--max-negative-xcmd-rows", type=int, default=0)
     parser.add_argument("--max-low-speed-ratio", type=float, default=0.15)
+    parser.add_argument("--max-collision-rows", type=int, default=0)
+    parser.add_argument("--min-nearest-margin", type=float, default=0.0)
     args = parser.parse_args()
 
     folders = sorted(p for p in glob.glob(os.path.join(args.dataset_dir, "*")) if os.path.isdir(p))
@@ -139,6 +166,8 @@ def main():
             max_post_goal_rows=args.max_post_goal_rows,
             max_negative_xcmd_rows=args.max_negative_xcmd_rows,
             max_low_speed_ratio=args.max_low_speed_ratio,
+            max_collision_rows=args.max_collision_rows,
+            min_nearest_margin=args.min_nearest_margin,
         )
         all_errors.extend(errors)
         rows += count

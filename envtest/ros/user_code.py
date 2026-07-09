@@ -193,7 +193,7 @@ class AStarDynamicExpert:
         prediction_horizon=3.0,
         dynamic_safety_radius=2.2,
         repulsion_gain=2.4,
-        max_avoid_speed=1.3,
+        max_avoid_speed=1.8,
         smoothing=0.65,
         static_speed_threshold=0.5,
         track_match_distance=2.0,
@@ -201,9 +201,12 @@ class AStarDynamicExpert:
         max_cmd_accel=5.0,
         cmd_smoothing=0.7,
         path_cache=None,
-        local_obstacle_safety_radius=2.4,
-        local_static_repulsion_gain=1.8,
-        local_obstacle_slow_radius=0.8,
+        local_obstacle_safety_radius=3.0,
+        local_static_repulsion_gain=2.6,
+        local_obstacle_slow_radius=1.5,
+        caution_margin=1.2,
+        danger_margin=0.6,
+        critical_margin=0.25,
         min_ttc_for_slowdown=1.2,
         critical_ttc=0.4,
         min_forward_speed=0.4,
@@ -237,6 +240,9 @@ class AStarDynamicExpert:
         self.local_obstacle_safety_radius = local_obstacle_safety_radius
         self.local_static_repulsion_gain = local_static_repulsion_gain
         self.local_obstacle_slow_radius = local_obstacle_slow_radius
+        self.caution_margin = caution_margin
+        self.danger_margin = danger_margin
+        self.critical_margin = critical_margin
         self.min_ttc_for_slowdown = min_ttc_for_slowdown
         self.critical_ttc = critical_ttc
         self.min_forward_speed = min_forward_speed
@@ -499,6 +505,16 @@ class AStarDynamicExpert:
                     static_slowdown,
                     (self.local_obstacle_slow_radius - margin) / max(self.local_obstacle_slow_radius, 1e-6),
                 )
+            if margin < self.caution_margin:
+                margin_slowdown = (self.caution_margin - margin) / max(
+                    self.caution_margin - self.critical_margin,
+                    1e-6,
+                )
+                static_slowdown = max(static_slowdown, margin_slowdown)
+            if margin < self.danger_margin:
+                static_slowdown = max(static_slowdown, 0.85)
+            if margin < self.critical_margin:
+                static_slowdown = 1.0
 
             safety = self.local_obstacle_safety_radius + meas["scale"]
             if dist < safety and pos[0] > -0.5:
@@ -507,6 +523,8 @@ class AStarDynamicExpert:
                 if np.linalg.norm(away[1:]) < 1e-6:
                     away[1] = 1.0
                 strength = self.local_static_repulsion_gain * (safety - dist) / safety
+                if margin < self.danger_margin:
+                    strength *= 1.0 + (self.danger_margin - margin) / max(self.danger_margin, 1e-6)
                 v_local += away * strength
 
         if not np.isfinite(nearest_margin):
@@ -552,6 +570,17 @@ class AStarDynamicExpert:
         self.prev_cmd = smoothed.copy()
         self.prev_cmd_t = t
         return smoothed
+
+    def _forward_safety_cap(self, nearest_margin, ttc_min, desiredVel):
+        if nearest_margin < self.critical_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc):
+            return 0.0
+        if nearest_margin < self.danger_margin:
+            margin_ratio = (nearest_margin - self.critical_margin) / max(
+                self.danger_margin - self.critical_margin,
+                1e-6,
+            )
+            return desiredVel * 0.2 * float(np.clip(margin_ratio, 0.0, 1.0))
+        return desiredVel
 
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
@@ -600,7 +629,9 @@ class AStarDynamicExpert:
             v_cmd[0] = max(1.0, (pos[0] / 2.0) * desiredVel)
         remaining_to_goal = self.goal[0] - pos[0]
         ttc_min = float(avoid_info.get("ttc_min", 0.0))
-        critical_stop = nearest_margin < 0.0 or (ttc_min > 0.0 and ttc_min < self.critical_ttc)
+        critical_stop = nearest_margin < self.danger_margin or (ttc_min > 0.0 and ttc_min < self.critical_ttc)
+        forward_cap = self._forward_safety_cap(nearest_margin, ttc_min, desiredVel)
+        v_cmd[0] = min(v_cmd[0], forward_cap)
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
             v_cmd[0] = max(min_forward, v_cmd[0])
@@ -611,6 +642,7 @@ class AStarDynamicExpert:
             v_cmd[0] = min(v_cmd[0], max_goal_speed)
 
         v_cmd = self._smooth_command(v_cmd, state.t, desiredVel)
+        v_cmd[0] = min(v_cmd[0], forward_cap)
         if remaining_to_goal > self.goal_gate_distance:
             min_forward = 0.0 if critical_stop else self.min_forward_speed
             v_cmd[0] = max(min_forward, v_cmd[0])

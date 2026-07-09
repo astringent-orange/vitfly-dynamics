@@ -81,6 +81,8 @@ class AgilePilotNode:
         self.t1 = 0 #Time flag
         self.timestamp = 0 #Time stamp initial
         self.last_valid_img = None #Image that will be logged
+        self.saved_timestamps = set()
+        self.last_saved_state_t = None
         data_log_format = {'timestamp':[],
                            'desired_vel':[],
                            'env_level':[],
@@ -344,6 +346,64 @@ class AgilePilotNode:
         self.flush_data_log()
         rospy.signal_shutdown(reason)
 
+    def try_log_sample(self, command, planner_info=None, nearest_margin=None):
+        if self.finished or self.state is None or self.last_valid_img is None:
+            return False
+        if self.state.pos[0] >= self.data_collection_xrange[1]:
+            self.finish_run("Reached goal")
+            return False
+        if self.state.pos[0] <= self.data_collection_xrange[0]:
+            return False
+
+        timestamp = round(self.state.t, 3)
+        if timestamp in self.saved_timestamps:
+            return False
+
+        image_path = f"{self.folder}/{str(timestamp)}.png"
+        if not cv2.imwrite(image_path, (self.last_valid_img * 255).astype(np.uint8)):
+            print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
+            return False
+        if self.save_rgb_debug and self.rgb_img is not None:
+            os.makedirs(self.debug_rgb_folder, exist_ok=True)
+            cv2.imwrite(f"{self.debug_rgb_folder}/{str(timestamp)}_rgb.png", (self.rgb_img * 255).astype(np.uint8))
+
+        if nearest_margin is None:
+            is_collide = int(self.col) if self.col is not None else 0
+        else:
+            is_collide = int(nearest_margin < 0.0)
+        ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
+        self.data_log.loc[len(self.data_log)] = [
+            timestamp,
+            self.desiredVel,
+            self.env_level,
+            self.env_folder,
+            self.env_seed,
+            self.state.att[0],
+            self.state.att[1],
+            self.state.att[2],
+            self.state.att[3],
+            self.state.pos[0],
+            self.state.pos[1],
+            self.state.pos[2],
+            self.state.vel[0],
+            self.state.vel[1],
+            self.state.vel[2],
+            command.velocity[0],
+            command.velocity[1],
+            command.velocity[2],
+            ct_cmd,
+            br_x,
+            br_y,
+            br_z,
+            is_collide,
+        ] + self.planner_log_values(planner_info)
+
+        self.saved_timestamps.add(timestamp)
+        self.last_saved_state_t = self.state.t
+        self.t1 = self.state.t
+        self.count += 1
+        return True
+
     def img_callback(self, img_data):
         if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
@@ -396,57 +456,11 @@ class AgilePilotNode:
             self.logged_time_flag = 1
         
         #if we exceed the time interval then save the data
-        if (self.state.t - self.t1 > self.time_interval or self.t1==0) and self.state.pos[0] < self.data_collection_xrange[1] and not self.finished:
-            #reset the time flag
-            self.t1 = self.state.t
-
-            # Get the current time stamp - instant
-            timestamp = round(
-                self.state.t, 3
-            )  # If you need more hz, you might need to modify this round
-
-            image_path = f"{self.folder}/{str(timestamp)}.png"
-            if not cv2.imwrite(image_path, (self.last_valid_img*255).astype(np.uint8)):
-                print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
-                return
-
-            # Get the collision flag
-            if self.col is None:
-                self.col = 0
-            ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
-            # Append the data frame
-            # @TODO: This needs to be managed better if the number of datapoints exceeds 10,000
-            self.data_log.loc[len(self.data_log)] = [
-                timestamp,
-                self.desiredVel,
-                self.env_level,
-                self.env_folder,
-                self.env_seed,
-                self.state.att[0],
-                self.state.att[1],
-                self.state.att[2],
-                self.state.att[3],
-                self.state.pos[0],
-                self.state.pos[1],
-                self.state.pos[2],
-                self.state.vel[0],
-                self.state.vel[1],
-                self.state.vel[2],
-                command.velocity[0],
-                command.velocity[1],
-                command.velocity[2],
-                ct_cmd,
-                br_x,
-                br_y,
-                br_z,
-                self.col,
-            ] + self.planner_log_values(None)
-
-            # Counter flag for saving the data frame
-            self.count += 1
+        if self.state.t - self.t1 > self.time_interval or self.t1 == 0:
+            self.try_log_sample(command, None, None)
 
         # Save once every 10 instances - writing every instance can be expensive
-        if self.count % 5 == 0:
+        if self.count % 5 == 0 and self.count != 0:
             self.flush_data_log()
 
     def state_callback(self, state_data):
@@ -498,65 +512,11 @@ class AgilePilotNode:
             self.logged_time_flag = 1
         
         # if we exceed the time interval then save the data
-        if (self.state.t - self.t1 > self.time_interval or self.t1 == 0 or self.col) and (self.state.pos[2] > 2.95 or self.init == 1):
+        if (self.state.t - self.t1 > self.time_interval or self.t1 == 0) and (self.state.pos[2] > 2.95 or self.init == 1):
             
             self.init = 1
 
-            if (
-                self.state.pos[0] > self.data_collection_xrange[0]
-                and self.state.pos[0] < self.data_collection_xrange[1]
-                and self.last_valid_img is not None
-                and not self.finished
-            ):
-
-                # reset the time flag
-                self.t1 = self.state.t
-
-                # Get the current time stamp
-                timestamp = round(self.state.t, 3)  # If you need more hz, you might need to modify this round
-
-                # Save the image by the name of that instant
-                # np.save(self.folder + f"/im_{timestamp}", self.last_valid_img)
-                image_path = f"{self.folder}/{str(timestamp)}.png"
-                if not cv2.imwrite(image_path, (self.last_valid_img*255).astype(np.uint8)):
-                    print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
-                    return
-                if self.save_rgb_debug and self.rgb_img is not None:
-                    os.makedirs(self.debug_rgb_folder, exist_ok=True)
-                    cv2.imwrite(f"{self.debug_rgb_folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
-
-                # Get the collision flag
-                ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
-                # Append the data frame
-                # @TODO: This needs to be managed better if the number of datapoints exceeds 10,000
-                self.data_log.loc[len(self.data_log)] = [
-                    timestamp,
-                    self.desiredVel,
-                    self.env_level,
-                    self.env_folder,
-                    self.env_seed,
-                    self.state.att[0],
-                    self.state.att[1],
-                    self.state.att[2],
-                    self.state.att[3],
-                    self.state.pos[0],
-                    self.state.pos[1],
-                    self.state.pos[2],
-                    self.state.vel[0],
-                    self.state.vel[1],
-                    self.state.vel[2],
-                    command.velocity[0],
-                    command.velocity[1],
-                    command.velocity[2],
-                    ct_cmd,
-                    br_x,
-                    br_y,
-                    br_z,
-                    int(nearest_margin < 0.0),
-                ] + self.planner_log_values(planner_info)
-
-                # Counter flag for saving the data frame
-                self.count += 1
+            self.try_log_sample(command, planner_info, nearest_margin)
 
         # Save once every 10 instances - writing every instance can be expensive
         if self.count % 2 == 0 and self.count != 0 or abs(self.state.pos[0] - 20) < 1:

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from candidate_speed_planner import CandidateSpeedPlanner, PathSpeedController, PolylinePath
+from candidate_speed_planner import CandidateSpeedPlanner, CandidateSpeedResult, CandidateYieldPolicy, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicTrajectory
 
 
@@ -83,6 +83,44 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         command, applied_speed = controller.apply(5.0, [1.0, 0.0, 0.0], 1.1, [0.0, 0.0, 0.0])
         self.assertAlmostEqual(applied_speed, 0.3)
         self.assertAlmostEqual(command[0], 0.3)
+
+    def candidate_result(self, selected, safe_speeds, desired=5.0):
+        evaluations = tuple(
+            (speed, 0.5 if speed in safe_speeds else -0.5, speed in safe_speeds)
+            for speed in np.linspace(0.0, desired, 11)
+        )
+        return CandidateSpeedResult(
+            selected_speed=selected,
+            safe_count=len(safe_speeds),
+            min_clearance=0.5,
+            emergency_stop=not any(speed > 0.0 for speed in safe_speeds),
+            initial_path_speed=selected,
+            evaluations=evaluations,
+        )
+
+    def test_yield_policy_holds_safe_lower_speed_until_release(self):
+        policy = CandidateYieldPolicy(release_frames=3)
+        slowed = self.candidate_result(2.5, [0.0, 1.0, 1.5, 2.0, 2.5])
+        speed, active = policy.apply(slowed, 5.0)
+        self.assertEqual(speed, 2.5)
+        self.assertTrue(active)
+
+        full_safe = self.candidate_result(5.0, list(np.linspace(0.0, 5.0, 11)))
+        self.assertEqual(policy.apply(full_safe, 5.0), (2.5, True))
+        self.assertEqual(policy.apply(full_safe, 5.0), (2.5, True))
+        self.assertEqual(policy.apply(full_safe, 5.0), (5.0, False))
+
+    def test_yield_policy_does_not_switch_to_faster_safe_candidate(self):
+        policy = CandidateYieldPolicy()
+        policy.apply(self.candidate_result(2.5, [0.0, 1.0, 2.0, 2.5]), 5.0)
+        result = self.candidate_result(4.0, [0.0, 1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(policy.apply(result, 5.0), (2.0, True))
+
+    def test_yield_policy_stops_when_no_candidate_is_safe(self):
+        policy = CandidateYieldPolicy()
+        policy.apply(self.candidate_result(2.0, [0.0, 1.0, 2.0]), 5.0)
+        result = self.candidate_result(0.0, [])
+        self.assertEqual(policy.apply(result, 5.0), (0.0, True))
 
     def test_loop_trajectory_position_and_velocity_are_finite(self):
         trajectory = DynamicTrajectory(

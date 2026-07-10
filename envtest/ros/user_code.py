@@ -16,7 +16,7 @@ if torch is not None:
     from model import *
 
 from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
-from candidate_speed_planner import CandidateSpeedPlanner, PathSpeedController, PolylinePath
+from candidate_speed_planner import CandidateSpeedPlanner, CandidateYieldPolicy, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
@@ -231,6 +231,7 @@ class AStarDynamicExpert:
             candidate_step=candidate_step,
         )
         self.speed_controller = PathSpeedController(candidate_prediction_accel)
+        self.yield_policy = CandidateYieldPolicy(release_frames=5)
         self.path = []
         self.path_polyline = None
         self.path_index = 0
@@ -280,6 +281,7 @@ class AStarDynamicExpert:
         self.tracks = []
         self.prev_t = None
         self.speed_controller.reset()
+        self.yield_policy.reset()
 
     def _make_command(self, state, velocity):
         command = AgileCommand(AgileCommandMode.LINVEL)
@@ -553,7 +555,8 @@ class AStarDynamicExpert:
         )
 
         remaining_to_goal = self.goal[0] - pos[0]
-        selected_speed = candidate_result.selected_speed
+        selected_speed, yield_active = self.yield_policy.apply(candidate_result, desiredVel)
+        candidate_clearance = candidate_result.clearance_for(selected_speed)
         if cross_track_error > 0.4:
             recovery_ratio = float(np.clip((0.8 - cross_track_error) / 0.4, 0.0, 1.0))
             recovery_cap = max(1.0, desiredVel * recovery_ratio)
@@ -576,7 +579,7 @@ class AStarDynamicExpert:
             drone_velocity,
         )
 
-        dynamic_slowdown = 0.0 if desiredVel <= 1e-6 else 1.0 - candidate_result.selected_speed / desiredVel
+        dynamic_slowdown = 0.0 if desiredVel <= 1e-6 else 1.0 - selected_speed / desiredVel
         dynamic_slowdown = float(np.clip(dynamic_slowdown, 0.0, 1.0))
 
         info = default_planner_info()
@@ -597,12 +600,14 @@ class AStarDynamicExpert:
                 "v_slowdown_x": dynamic_slowdown,
                 "v_slowdown_dynamic_x": dynamic_slowdown,
                 "configured_dynamic_obstacle_count": self._configured_dynamic_obstacle_count(),
-                "avoidance_active": int(candidate_result.selected_speed < desiredVel - 1e-6),
-                "candidate_selected_speed": candidate_result.selected_speed,
+                "avoidance_active": int(selected_speed < desiredVel - 1e-6),
+                "candidate_selected_speed": selected_speed,
                 "candidate_safe_count": candidate_result.safe_count,
-                "candidate_min_clearance": candidate_result.min_clearance,
+                "candidate_min_clearance": candidate_clearance,
                 "candidate_emergency_stop": int(candidate_result.emergency_stop),
                 "candidate_prediction_horizon": self.candidate_planner.horizon,
+                "candidate_raw_selected_speed": candidate_result.selected_speed,
+                "candidate_yield_active": int(yield_active),
             }
         )
         info.update(dynamic_info)

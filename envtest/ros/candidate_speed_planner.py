@@ -12,6 +12,62 @@ class CandidateSpeedResult:
     min_clearance: float
     emergency_stop: bool
     initial_path_speed: float
+    evaluations: tuple
+
+    @property
+    def safe_speeds(self):
+        return tuple(speed for speed, _, safe in self.evaluations if safe)
+
+    def clearance_for(self, speed):
+        if not self.evaluations:
+            return 999.0
+        return float(min(self.evaluations, key=lambda item: abs(item[0] - speed))[1])
+
+
+class CandidateYieldPolicy:
+    def __init__(self, release_frames=5):
+        self.release_frames = int(release_frames)
+        if self.release_frames <= 0:
+            raise ValueError("release_frames must be positive")
+        self.reset()
+
+    def reset(self):
+        self.active = False
+        self.target_speed = 0.0
+        self.full_speed_safe_frames = 0
+
+    def apply(self, result, desired_speed):
+        desired_speed = max(0.0, float(desired_speed))
+        raw_speed = max(0.0, float(result.selected_speed))
+        safe_speeds = sorted(float(speed) for speed in result.safe_speeds)
+        full_speed_safe = any(abs(speed - desired_speed) <= 1e-6 for speed in safe_speeds)
+
+        if not self.active:
+            self.target_speed = raw_speed
+            if raw_speed < desired_speed - 1e-6:
+                self.active = True
+                self.full_speed_safe_frames = 0
+            return self.target_speed, self.active
+
+        if full_speed_safe:
+            self.full_speed_safe_frames += 1
+        else:
+            self.full_speed_safe_frames = 0
+
+        if self.full_speed_safe_frames >= self.release_frames:
+            self.active = False
+            self.target_speed = desired_speed
+            self.full_speed_safe_frames = 0
+            return self.target_speed, self.active
+
+        nonincreasing_safe = [speed for speed in safe_speeds if speed <= self.target_speed + 1e-6]
+        if nonincreasing_safe:
+            self.target_speed = max(nonincreasing_safe)
+        elif safe_speeds:
+            self.target_speed = min(safe_speeds)
+        else:
+            self.target_speed = 0.0
+        return self.target_speed, self.active
 
 
 class PathSpeedController:
@@ -251,4 +307,5 @@ class CandidateSpeedPlanner:
             min_clearance=float(min_clearance),
             emergency_stop=emergency_stop,
             initial_path_speed=float(initial_path_speed),
+            evaluations=tuple(evaluations),
         )

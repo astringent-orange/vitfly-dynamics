@@ -604,8 +604,10 @@ class AStarDynamicExpert:
         path_direction = path_vec / max(np.linalg.norm(path_vec), 1e-6)
         v_path = path_direction * selected_speed
         v_cmd = v_path.copy()
+        v_cmd[0] = max(0.0, v_cmd[0])
         v_cmd = self._smooth_command(v_cmd, state.t, desiredVel)
         v_cmd[0] = max(0.0, v_cmd[0])
+        self.prev_cmd[0] = v_cmd[0]
         if 0.0 < remaining_to_goal < self.goal_slowdown_distance:
             max_goal_speed = desiredVel * max(0.2, remaining_to_goal / self.goal_slowdown_distance)
             v_cmd[0] = min(v_cmd[0], max_goal_speed)

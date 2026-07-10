@@ -59,6 +59,11 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         self.assertAlmostEqual(initial_speed, -1.0)
         self.assertLess(positions[1, 0], positions[0, 0])
 
+    def test_candidate_targets_are_never_negative(self):
+        candidates = self.planner.candidate_speeds(5.0)
+        self.assertTrue(np.all(candidates >= 0.0))
+        self.assertAlmostEqual(candidates[-1], 5.0)
+
     def test_loop_trajectory_position_and_velocity_are_finite(self):
         trajectory = DynamicTrajectory(
             "loop",

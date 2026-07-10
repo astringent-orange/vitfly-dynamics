@@ -18,6 +18,7 @@ from utils import AgileCommandMode, AgileQuadState
 
 import atexit
 import time
+import threading
 import numpy as np
 import pandas as pd
 import os, sys
@@ -92,6 +93,7 @@ class AgilePilotNode:
         self.last_valid_img = None #Image that will be logged
         self.saved_timestamps = set()
         self.last_saved_state_t = None
+        self.data_log_lock = threading.RLock()
         data_log_format = {'timestamp':[],
                            'desired_vel':[],
                            'env_level':[],
@@ -315,30 +317,32 @@ class AgilePilotNode:
         return [info[field] for field in PLANNER_FIELDS]
 
     def sanitize_data_log(self):
-        if not hasattr(self, "data_log"):
-            return
-        cleaned = self.data_log.drop_duplicates(subset=["timestamp"], keep="first")
-        if "pos_x" in cleaned.columns:
-            pos_x = pd.to_numeric(cleaned["pos_x"], errors="coerce")
-            cleaned = cleaned[pos_x < self.data_collection_xrange[1]]
+        with self.data_log_lock:
+            if not hasattr(self, "data_log"):
+                return
+            cleaned = self.data_log.drop_duplicates(subset=["timestamp"], keep="first")
+            if "pos_x" in cleaned.columns:
+                pos_x = pd.to_numeric(cleaned["pos_x"], errors="coerce")
+                cleaned = cleaned[pos_x < self.data_collection_xrange[1]]
 
-        cleanup_orphan_depth_images(self.folder, cleaned["timestamp"].tolist())
+            cleanup_orphan_depth_images(self.folder, cleaned["timestamp"].tolist())
 
-        self.data_log = cleaned.reset_index(drop=True)
-        self.saved_timestamps = set()
-        for timestamp in self.data_log["timestamp"].tolist():
-            try:
-                self.saved_timestamps.add(float(timestamp))
-            except (TypeError, ValueError):
-                pass
+            self.data_log = cleaned.reset_index(drop=True)
+            self.saved_timestamps = set()
+            for timestamp in self.data_log["timestamp"].tolist():
+                try:
+                    self.saved_timestamps.add(float(timestamp))
+                except (TypeError, ValueError):
+                    pass
 
     def flush_data_log(self):
-        try:
-            if hasattr(self, "folder") and hasattr(self, "data_log"):
-                self.sanitize_data_log()
-                self.data_log.to_csv(self.folder + "/data.csv", index=False)
-        except Exception as exc:
-            print(f"[RUN_COMPETITION] Failed to flush data.csv: {exc}")
+        with self.data_log_lock:
+            try:
+                if hasattr(self, "folder") and hasattr(self, "data_log"):
+                    self.sanitize_data_log()
+                    self.data_log.to_csv(self.folder + "/data.csv", index=False)
+            except Exception as exc:
+                print(f"[RUN_COMPETITION] Failed to flush data.csv: {exc}")
 
     def shutdown_callback(self):
         self.is_shutting_down = True
@@ -376,6 +380,10 @@ class AgilePilotNode:
         rospy.signal_shutdown(reason)
 
     def try_log_sample(self, command, state_snapshot, planner_info=None, nearest_margin=None):
+        with self.data_log_lock:
+            return self._try_log_sample_locked(command, state_snapshot, planner_info, nearest_margin)
+
+    def _try_log_sample_locked(self, command, state_snapshot, planner_info=None, nearest_margin=None):
         if self.finished or state_snapshot is None or self.last_valid_img is None:
             return False
         if state_snapshot.pos[0] >= self.data_collection_xrange[1]:
@@ -389,7 +397,8 @@ class AgilePilotNode:
             return False
 
         image_path = f"{self.folder}/{str(timestamp)}.png"
-        if not cv2.imwrite(image_path, (self.last_valid_img * 255).astype(np.uint8)):
+        depth_image = self.last_valid_img.copy()
+        if not cv2.imwrite(image_path, (depth_image * 255).astype(np.uint8)):
             print(f"[RUN_COMPETITION] Failed to write depth image {image_path}")
             return False
         if self.save_rgb_debug and self.rgb_img is not None:

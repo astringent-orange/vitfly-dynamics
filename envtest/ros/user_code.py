@@ -514,6 +514,16 @@ class AStarDynamicExpert:
                 return predictions
         return self._linear_obstacle_predictions(state, rel_obstacles)
 
+    def _safe_candidate_at_or_below(self, candidate_result, upper_bound, fallback):
+        safe_speeds = [
+            float(speed)
+            for speed in candidate_result.safe_speeds
+            if speed <= upper_bound + 1e-6
+        ]
+        if safe_speeds:
+            return max(safe_speeds)
+        return float(fallback)
+
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
         state_t = float(state.t)
@@ -578,10 +588,20 @@ class AStarDynamicExpert:
         if cross_track_error > 0.4:
             recovery_ratio = float(np.clip((0.8 - cross_track_error) / 0.4, 0.0, 1.0))
             recovery_cap = max(1.0, desiredVel * recovery_ratio)
-            selected_speed = min(selected_speed, recovery_cap)
+            if selected_speed > recovery_cap:
+                selected_speed = self._safe_candidate_at_or_below(
+                    candidate_result,
+                    recovery_cap,
+                    selected_speed,
+                )
         if 0.0 < remaining_to_goal < self.goal_slowdown_distance:
             max_goal_speed = desiredVel * max(0.2, remaining_to_goal / self.goal_slowdown_distance)
-            selected_speed = min(selected_speed, max_goal_speed)
+            if selected_speed > max_goal_speed:
+                selected_speed = self._safe_candidate_at_or_below(
+                    candidate_result,
+                    max_goal_speed,
+                    selected_speed,
+                )
 
         if np.linalg.norm(path_vec) > 1e-6:
             path_direction = path_vec / np.linalg.norm(path_vec)

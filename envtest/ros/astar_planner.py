@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-DEFAULT_STATIC_INFLATION = 0.8
+DEFAULT_STATIC_INFLATION = 0.9
 DEFAULT_SEGMENT_CLEARANCE = 0.02
 
 

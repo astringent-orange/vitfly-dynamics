@@ -73,6 +73,23 @@ def write_dynamic_yaml(path, objects):
                 f.write(f"  - {obj['scale']:.6f}\n")
 
 
+def plan_astar_path(args, static_csv, output_dir):
+    planner = StaticAStarPlanner(
+        str(static_csv),
+        resolution=args.astar_resolution,
+        inflation_radius=args.static_inflation,
+    )
+    planned_path = planner.plan(args.astar_start, args.astar_goal)
+    if not planned_path:
+        raise RuntimeError(f"A* failed for {output_dir}")
+    if not all(
+        planner.segment_margin(planned_path[idx], planned_path[idx + 1]) >= -1e-9
+        for idx in range(len(planned_path) - 1)
+    ):
+        raise RuntimeError(f"A* path enters an inflated obstacle for {output_dir}")
+    return planned_path
+
+
 def generate_one(args, env_id):
     rng = np.random.default_rng(args.seed + env_id * 9973)
     root = repo_root()
@@ -113,19 +130,34 @@ def generate_one(args, env_id):
         )
 
     write_dynamic_yaml(output_dir / "dynamic_obstacles.yaml", objects)
-    planner = StaticAStarPlanner(
-        str(output_dir / "static_obstacles.csv"),
-        resolution=args.astar_resolution,
-        inflation_radius=args.static_inflation,
-    )
-    planned_path = planner.plan(args.astar_start, args.astar_goal)
-    if not planned_path:
-        raise RuntimeError(f"A* failed for {output_dir}")
+    planned_path = plan_astar_path(args, output_dir / "static_obstacles.csv", output_dir)
     write_path_csv(output_dir / "astar_path.csv", planned_path)
     print(f"[GEN_DYNAMIC_ASTAR] Wrote {args.num_dynamic} dynamic obstacles to {output_dir}")
 
 
+def rebuild_paths_only(args):
+    root = repo_root()
+    output_root = root / "flightmare" / "flightpy" / "configs" / "vision" / f"dynamic_astar_{args.difficulty}"
+    planned_paths = []
+    for env_id in args.env_ids:
+        output_dir = output_root / f"environment_{env_id}"
+        static_csv = output_dir / "static_obstacles.csv"
+        if not static_csv.exists():
+            raise FileNotFoundError(f"Static map not found: {static_csv}")
+        planned_paths.append((output_dir, plan_astar_path(args, static_csv, output_dir)))
+
+    for output_dir, planned_path in planned_paths:
+        write_path_csv(output_dir / "astar_path.csv", planned_path)
+        print(
+            f"[GEN_DYNAMIC_ASTAR] Rebuilt A* path for {output_dir} "
+            f"with inflation={args.static_inflation:.2f}m points={len(planned_path)}"
+        )
+
+
 def generate(args):
+    if args.path_only:
+        rebuild_paths_only(args)
+        return
     for env_id in args.env_ids:
         generate_one(args, env_id)
 
@@ -142,6 +174,7 @@ def main():
     parser.add_argument("--static-inflation", type=float, default=DEFAULT_STATIC_INFLATION)
     parser.add_argument("--astar-start", type=float, nargs=3, default=[0.0, 0.0, 3.0])
     parser.add_argument("--astar-goal", type=float, nargs=3, default=[60.0, 0.0, 3.0])
+    parser.add_argument("--path-only", action="store_true", help="Only rebuild astar_path.csv in existing dynamic environments.")
     args = parser.parse_args()
     generate(args)
 

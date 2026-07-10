@@ -306,3 +306,31 @@ class DynamicObstacleTrajectoryPredictor:
                 }
             )
         return measurements
+
+    def world_predictions(self, state, dynamic_obstacles_msg, time_offsets):
+        if not self.maybe_recalibrate(state, dynamic_obstacles_msg):
+            return []
+
+        state_t = float(state.t)
+        offsets = np.asarray(time_offsets, dtype=float)
+        predictions = []
+        for idx, traj in enumerate(self.trajectories):
+            calib = self.calibration.get(idx)
+            if calib is None:
+                continue
+            current_phase = calib["phase"] + (state_t - calib["state_t"])
+            positions = np.asarray(
+                [traj.position_at(current_phase + offset) for offset in offsets],
+                dtype=float,
+            )
+            if not np.all(np.isfinite(positions)):
+                continue
+            predictions.append(
+                {
+                    "index": idx,
+                    "name": traj.name,
+                    "radius": traj.scale,
+                    "positions": positions,
+                }
+            )
+        return predictions

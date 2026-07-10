@@ -45,6 +45,8 @@ REQUIRED_COLUMNS = [
     "candidate_yield_active",
     "candidate_applied_speed",
     "path_cross_track_error",
+    "path_turn_angle_deg",
+    "path_speed_ceiling",
     "is_collide",
 ]
 
@@ -151,6 +153,8 @@ def validate_trajectory(
         "candidate_yield_active",
         "candidate_applied_speed",
         "path_cross_track_error",
+        "path_turn_angle_deg",
+        "path_speed_ceiling",
         "desired_vel",
     }
     if candidate_fields.issubset(fieldnames):
@@ -166,6 +170,8 @@ def validate_trajectory(
             yield_active = np.asarray([int(float(row["candidate_yield_active"])) for row in rows])
             applied_speeds = np.asarray([float(row["candidate_applied_speed"]) for row in rows])
             cross_track_errors = np.asarray([float(row["path_cross_track_error"]) for row in rows])
+            turn_angles = np.asarray([float(row["path_turn_angle_deg"]) for row in rows])
+            path_speed_ceilings = np.asarray([float(row["path_speed_ceiling"]) for row in rows])
             slowdown_dynamic = np.asarray([float(row["v_slowdown_dynamic_x"]) for row in rows])
             slowdown_total = np.asarray([float(row["v_slowdown_x"]) for row in rows])
             avoidance_active = np.asarray([int(float(row["avoidance_active"])) for row in rows])
@@ -181,6 +187,8 @@ def validate_trajectory(
                     raw_selected_speeds,
                     applied_speeds,
                     cross_track_errors,
+                    turn_angles,
+                    path_speed_ceilings,
                 )
             )
             if not np.isfinite(finite_values).all():
@@ -198,6 +206,10 @@ def validate_trajectory(
             )
             if applied_out_of_range:
                 errors.append(f"{path}: applied candidate speed out-of-range rows {int(applied_out_of_range)}")
+            if np.any((turn_angles < -1e-6) | (turn_angles > 180.0 + 1e-6)):
+                errors.append(f"{path}: invalid path turn angle")
+            if np.any((path_speed_ceilings < -1e-6) | (path_speed_ceilings > desired_speeds + 1e-6)):
+                errors.append(f"{path}: invalid path speed ceiling")
             invalid_emergency = np.sum(
                 (emergency_stops != 0)
                 & ((selected_speeds > 1e-6) | (safe_counts > 1))

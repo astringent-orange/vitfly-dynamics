@@ -186,6 +186,8 @@ def default_planner_info():
         "candidate_yield_active": 0,
         "candidate_applied_speed": 0.0,
         "path_cross_track_error": 0.0,
+        "path_turn_angle_deg": 0.0,
+        "path_speed_ceiling": 0.0,
     }
 
 
@@ -201,11 +203,16 @@ class AStarDynamicExpert:
         track_match_distance=2.0,
         track_max_misses=3,
         path_cache=None,
-        candidate_prediction_horizon=3.0,
+        candidate_prediction_horizon=2.2,
         candidate_prediction_dt=0.1,
         candidate_prediction_accel=3.0,
         candidate_safety_margin=1.0,
         candidate_step=0.1,
+        turn_preview_distance=2.5,
+        medium_turn_angle_deg=15.0,
+        sharp_turn_angle_deg=30.0,
+        medium_turn_speed=4.0,
+        sharp_turn_speed=3.0,
         goal_gate_distance=0.3,
         goal_slowdown_distance=1.5,
     ):
@@ -227,6 +234,11 @@ class AStarDynamicExpert:
         self.track_max_misses = track_max_misses
         self.goal_gate_distance = goal_gate_distance
         self.goal_slowdown_distance = goal_slowdown_distance
+        self.turn_preview_distance = float(turn_preview_distance)
+        self.medium_turn_angle_deg = float(medium_turn_angle_deg)
+        self.sharp_turn_angle_deg = float(sharp_turn_angle_deg)
+        self.medium_turn_speed = float(medium_turn_speed)
+        self.sharp_turn_speed = float(sharp_turn_speed)
         self.candidate_planner = CandidateSpeedPlanner(
             horizon=candidate_prediction_horizon,
             prediction_dt=candidate_prediction_dt,
@@ -258,6 +270,18 @@ class AStarDynamicExpert:
         except Exception as exc:
             print(f"[AStarDynamicExpert] Dynamic trajectory predictor disabled: {exc}")
             return None
+
+    def _path_speed_ceiling(self, path, pos, desired_speed):
+        if path is None:
+            return float(desired_speed), 0.0
+        turn_angle = path.turn_angle_ahead(pos, self.turn_preview_distance)
+        if turn_angle > self.sharp_turn_angle_deg:
+            ceiling = self.sharp_turn_speed
+        elif turn_angle > self.medium_turn_angle_deg:
+            ceiling = self.medium_turn_speed
+        else:
+            ceiling = float(desired_speed)
+        return min(float(desired_speed), ceiling), turn_angle
 
     def _load_cached_path(self):
         if not self.path_cache or not os.path.exists(self.path_cache):
@@ -574,16 +598,21 @@ class AStarDynamicExpert:
         nearest_margin, nearest_static_dist = self._obstacle_diagnostics(all_measurements, dynamic_measurements)
         obstacle_predictions = self._dynamic_predictions(state, dynamic_obstacles, rel_obstacles)
         candidate_path = self.path_polyline if self.path_polyline is not None else PolylinePath([pos, self.goal])
+        path_speed_ceiling, path_turn_angle_deg = self._path_speed_ceiling(
+            candidate_path,
+            pos,
+            desiredVel,
+        )
         candidate_result = self.candidate_planner.select_speed(
             candidate_path,
             pos,
             drone_velocity,
-            desiredVel,
+            path_speed_ceiling,
             obstacle_predictions,
         )
 
         remaining_to_goal = self.goal[0] - pos[0]
-        selected_speed, yield_active = self.yield_policy.apply(candidate_result, desiredVel)
+        selected_speed, yield_active = self.yield_policy.apply(candidate_result, path_speed_ceiling)
         candidate_clearance = candidate_result.clearance_for(selected_speed)
         if cross_track_error > 0.4:
             recovery_ratio = float(np.clip((0.8 - cross_track_error) / 0.4, 0.0, 1.0))
@@ -649,6 +678,8 @@ class AStarDynamicExpert:
                 "candidate_yield_active": int(yield_active),
                 "candidate_applied_speed": applied_speed,
                 "path_cross_track_error": cross_track_error,
+                "path_turn_angle_deg": path_turn_angle_deg,
+                "path_speed_ceiling": path_speed_ceiling,
             }
         )
         info.update(dynamic_info)

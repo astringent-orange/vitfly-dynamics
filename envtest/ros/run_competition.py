@@ -63,6 +63,8 @@ PLANNER_FIELDS = [
     "candidate_yield_active",
     "candidate_applied_speed",
     "path_cross_track_error",
+    "path_turn_angle_deg",
+    "path_speed_ceiling",
 ]
 
 

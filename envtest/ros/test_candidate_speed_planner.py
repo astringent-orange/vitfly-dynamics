@@ -70,6 +70,11 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         np.testing.assert_allclose(reference["reference"], [5.0, 0.7, 3.0], atol=1e-6)
         self.assertAlmostEqual(reference["cross_track_error"], 0.0)
 
+    def test_turn_angle_preview_detects_upcoming_corner(self):
+        path = PolylinePath([[0.0, 0.0, 3.0], [5.0, 0.0, 3.0], [5.0, 5.0, 3.0]])
+        self.assertAlmostEqual(path.turn_angle_ahead([3.0, 0.0, 3.0], 2.5), 90.0)
+        self.assertAlmostEqual(path.turn_angle_ahead([1.0, 0.0, 3.0], 2.5), 0.0)
+
     def test_speed_controller_reuses_command_for_same_timestamp(self):
         controller = PathSpeedController(max_accel=3.0)
         first, first_speed = controller.apply(5.0, [1.0, 0.0, 0.0], 1.0, [2.0, 0.0, 0.0])

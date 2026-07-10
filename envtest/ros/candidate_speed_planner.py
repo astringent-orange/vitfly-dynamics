@@ -197,6 +197,14 @@ class PolylinePath:
             "cross_track_error": cross_track_error,
         }
 
+    def turn_angle_ahead(self, position, preview_distance):
+        """Return the path-direction change visible within the preview distance."""
+        progress, _, tangent = self.project(position)
+        preview_progress = min(self.length, progress + max(0.0, float(preview_distance)))
+        preview_tangent = self.tangent_at(preview_progress)
+        cosine = float(np.clip(np.dot(tangent, preview_tangent), -1.0, 1.0))
+        return float(np.degrees(np.arccos(cosine)))
+
 
 class CandidateSpeedPlanner:
     def __init__(

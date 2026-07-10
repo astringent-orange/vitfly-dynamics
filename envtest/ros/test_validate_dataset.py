@@ -33,6 +33,8 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
                 "candidate_yield_active": 0,
                 "candidate_applied_speed": 5.0,
                 "path_cross_track_error": 0.0,
+                "path_turn_angle_deg": 0.0,
+                "path_speed_ceiling": 5.0,
             }
         )
         return row

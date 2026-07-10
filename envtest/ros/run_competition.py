@@ -40,9 +40,6 @@ PLANNER_FIELDS = [
     "v_path_x",
     "v_path_y",
     "v_path_z",
-    "v_avoid_x",
-    "v_avoid_y",
-    "v_avoid_z",
     "nearest_dyn_dist",
     "nearest_dyn_rel_speed",
     "ttc_min",
@@ -55,9 +52,12 @@ PLANNER_FIELDS = [
     "dynamic_obstacle_count",
     "v_slowdown_x",
     "v_slowdown_dynamic_x",
-    "v_slowdown_static_x",
-    "local_fallback_control_enabled",
     "configured_dynamic_obstacle_count",
+    "candidate_selected_speed",
+    "candidate_safe_count",
+    "candidate_min_clearance",
+    "candidate_emergency_stop",
+    "candidate_prediction_horizon",
 ]
 
 

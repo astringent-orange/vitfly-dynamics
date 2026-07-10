@@ -164,9 +164,6 @@ def default_planner_info():
         "v_path_x": 0.0,
         "v_path_y": 0.0,
         "v_path_z": 0.0,
-        "v_avoid_x": 0.0,
-        "v_avoid_y": 0.0,
-        "v_avoid_z": 0.0,
         "nearest_dyn_dist": 0.0,
         "nearest_dyn_rel_speed": 0.0,
         "ttc_min": 0.0,
@@ -179,9 +176,12 @@ def default_planner_info():
         "dynamic_obstacle_count": 0,
         "v_slowdown_x": 0.0,
         "v_slowdown_dynamic_x": 0.0,
-        "v_slowdown_static_x": 0.0,
-        "local_fallback_control_enabled": 0,
         "configured_dynamic_obstacle_count": 0,
+        "candidate_selected_speed": 0.0,
+        "candidate_safe_count": 0,
+        "candidate_min_clearance": 0.0,
+        "candidate_emergency_stop": 0,
+        "candidate_prediction_horizon": 0.0,
     }
 
 
@@ -632,6 +632,11 @@ class AStarDynamicExpert:
                 "v_slowdown_dynamic_x": dynamic_slowdown,
                 "configured_dynamic_obstacle_count": self._configured_dynamic_obstacle_count(),
                 "avoidance_active": int(candidate_result.selected_speed < desiredVel - 1e-6),
+                "candidate_selected_speed": candidate_result.selected_speed,
+                "candidate_safe_count": candidate_result.safe_count,
+                "candidate_min_clearance": candidate_result.min_clearance,
+                "candidate_emergency_stop": int(candidate_result.emergency_stop),
+                "candidate_prediction_horizon": self.candidate_planner.horizon,
             }
         )
         info.update(dynamic_info)

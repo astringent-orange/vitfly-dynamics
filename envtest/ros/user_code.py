@@ -244,6 +244,9 @@ class AStarDynamicExpert:
         self.tracks = []
         self.next_track_id = 1
         self.prev_t = None
+        self.last_compute_t = None
+        self.last_command_velocity = None
+        self.last_planner_info = None
         self.dynamic_predictor = self._make_dynamic_predictor()
         print("[AStarDynamicExpert] Candidate-speed dynamic planner enabled")
 
@@ -284,6 +287,9 @@ class AStarDynamicExpert:
         self.path_index = 0
         self.tracks = []
         self.prev_t = None
+        self.last_compute_t = None
+        self.last_command_velocity = None
+        self.last_planner_info = None
         self.speed_controller.reset()
         self.yield_policy.reset()
 
@@ -510,6 +516,14 @@ class AStarDynamicExpert:
 
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
+        state_t = float(state.t)
+        if self.last_compute_t is not None and abs(state_t - self.last_compute_t) <= 1e-9:
+            return (
+                self._make_command(state, self.last_command_velocity),
+                self.last_planner_info.copy(),
+            )
+        if self.last_compute_t is not None and state_t < self.last_compute_t:
+            self.reset_path()
         if pos[0] >= self.goal[0]:
             info = default_planner_info()
             info.update(
@@ -618,6 +632,9 @@ class AStarDynamicExpert:
             }
         )
         info.update(dynamic_info)
+        self.last_compute_t = state_t
+        self.last_command_velocity = np.asarray(v_cmd, dtype=float).copy()
+        self.last_planner_info = info.copy()
         return self._make_command(state, v_cmd), info
 
 

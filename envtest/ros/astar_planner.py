@@ -9,6 +9,11 @@ import numpy as np
 
 DEFAULT_STATIC_INFLATION = 0.8
 DEFAULT_SEGMENT_CLEARANCE = 0.02
+DEFAULT_MIN_WAYPOINT_SPACING = 1.0
+DEFAULT_SMOOTH_ANGLE_DEG = 20.0
+DEFAULT_SMOOTH_RADIUS = 1.1
+DEFAULT_SMOOTH_SAMPLES = 4
+DEFAULT_MAX_SHORTCUT_LENGTH = 1.5
 
 
 @dataclass
@@ -133,7 +138,11 @@ class StaticAStarPlanner:
             if current in visited:
                 continue
             if current == goal_idx:
-                return self.simplify_path(self._reconstruct(came_from, current))
+                simplified = self.simplify_path(
+                    self._reconstruct(came_from, current),
+                    max_segment_length=DEFAULT_MAX_SHORTCUT_LENGTH,
+                )
+                return self.postprocess_path(simplified)
             visited.add(current)
             for neighbor, step_cost in self._neighbors(current):
                 tentative = cost + step_cost
@@ -185,7 +194,26 @@ class StaticAStarPlanner:
     def segment_has_clearance(self, start, end):
         return self.segment_is_free(start, end) and self.segment_margin(start, end) >= self.segment_clearance - 1e-9
 
-    def simplify_path(self, path):
+    def path_has_clearance(self, path):
+        path = [np.asarray(point, dtype=float) for point in path]
+        return all(self.segment_has_clearance(path[i], path[i + 1]) for i in range(len(path) - 1))
+
+    def path_has_min_margin(self, path, min_margin):
+        path = [np.asarray(point, dtype=float) for point in path]
+        for idx in range(len(path) - 1):
+            if not self.segment_is_free(path[idx], path[idx + 1]):
+                return False
+            if self.segment_margin(path[idx], path[idx + 1]) < min_margin - 1e-9:
+                return False
+        return True
+
+    def path_min_margin(self, path):
+        path = [np.asarray(point, dtype=float) for point in path]
+        if len(path) < 2:
+            return float("inf")
+        return min(self.segment_margin(path[i], path[i + 1]) for i in range(len(path) - 1))
+
+    def simplify_path(self, path, max_segment_length=None):
         if len(path) <= 2:
             return [np.asarray(p, dtype=float) for p in path]
         simplified = [np.asarray(path[0], dtype=float)]
@@ -194,6 +222,10 @@ class StaticAStarPlanner:
             best = anchor + 1
             probe = anchor + 2
             while probe < len(path):
+                if max_segment_length is not None:
+                    segment_length = float(np.linalg.norm(np.asarray(path[probe]) - np.asarray(path[anchor])))
+                    if segment_length > max_segment_length:
+                        break
                 if not self.segment_has_clearance(path[anchor], path[probe]):
                     break
                 best = probe
@@ -201,6 +233,165 @@ class StaticAStarPlanner:
             simplified.append(np.asarray(path[best], dtype=float))
             anchor = best
         return simplified
+
+    def postprocess_path(
+        self,
+        path,
+        min_waypoint_spacing=DEFAULT_MIN_WAYPOINT_SPACING,
+        smooth_angle_deg=DEFAULT_SMOOTH_ANGLE_DEG,
+        smooth_radius=DEFAULT_SMOOTH_RADIUS,
+        smooth_samples=DEFAULT_SMOOTH_SAMPLES,
+    ):
+        path = [np.asarray(point, dtype=float) for point in path]
+        if len(path) <= 2:
+            return path
+        baseline_margin = min(self.segment_clearance, self.path_min_margin(path))
+        merged = self.merge_short_segments(path, min_waypoint_spacing)
+        smoothed = self.smooth_corners(
+            merged,
+            angle_threshold_deg=smooth_angle_deg,
+            smooth_radius=smooth_radius,
+            smooth_samples=smooth_samples,
+            min_margin=baseline_margin,
+        )
+        if len(smoothed) >= 2 and self.path_has_min_margin(smoothed, baseline_margin):
+            return smoothed
+        return merged if self.path_has_min_margin(merged, baseline_margin) else path
+
+    def merge_short_segments(self, path, min_waypoint_spacing=DEFAULT_MIN_WAYPOINT_SPACING):
+        path = [np.asarray(point, dtype=float) for point in path]
+        if len(path) <= 2:
+            return path
+        merged = [path[0]]
+        idx = 1
+        while idx < len(path) - 1:
+            prev = merged[-1]
+            current = path[idx]
+            nxt = path[idx + 1]
+            if np.linalg.norm(current - prev) < min_waypoint_spacing and self.segment_has_clearance(prev, nxt):
+                idx += 1
+                continue
+            merged.append(current)
+            idx += 1
+        merged.append(path[-1])
+        return merged
+
+    def smooth_corners(
+        self,
+        path,
+        angle_threshold_deg=DEFAULT_SMOOTH_ANGLE_DEG,
+        smooth_radius=DEFAULT_SMOOTH_RADIUS,
+        smooth_samples=DEFAULT_SMOOTH_SAMPLES,
+        min_margin=None,
+    ):
+        path = [np.asarray(point, dtype=float) for point in path]
+        if len(path) <= 2:
+            return path
+        min_margin = self.segment_clearance if min_margin is None else float(min_margin)
+        smoothed = [path[0]]
+        for idx in range(1, len(path) - 1):
+            prev_point = smoothed[-1]
+            corner = path[idx]
+            next_point = path[idx + 1]
+            replacement = self._corner_replacement(
+                prev_point,
+                corner,
+                next_point,
+                angle_threshold_deg=angle_threshold_deg,
+                smooth_radius=smooth_radius,
+                smooth_samples=smooth_samples,
+            )
+            if replacement is None:
+                smoothed.append(corner)
+                continue
+            if self._replacement_has_clearance(prev_point, replacement, next_point, min_margin):
+                smoothed.extend(replacement)
+            else:
+                smoothed.append(corner)
+        smoothed.append(path[-1])
+        return self._dedupe_path(smoothed)
+
+    def _corner_replacement(
+        self,
+        prev_point,
+        corner,
+        next_point,
+        angle_threshold_deg=DEFAULT_SMOOTH_ANGLE_DEG,
+        smooth_radius=DEFAULT_SMOOTH_RADIUS,
+        smooth_samples=DEFAULT_SMOOTH_SAMPLES,
+    ):
+        incoming = corner - prev_point
+        outgoing = next_point - corner
+        incoming_len = float(np.linalg.norm(incoming))
+        outgoing_len = float(np.linalg.norm(outgoing))
+        if incoming_len <= 1e-6 or outgoing_len <= 1e-6:
+            return None
+        incoming_dir = incoming / incoming_len
+        outgoing_dir = outgoing / outgoing_len
+        dot = float(np.clip(np.dot(incoming_dir, outgoing_dir), -1.0, 1.0))
+        angle_deg = math.degrees(math.acos(dot))
+        if angle_deg < angle_threshold_deg:
+            return None
+
+        radius = min(float(smooth_radius), 0.45 * incoming_len, 0.45 * outgoing_len)
+        if radius < max(self.resolution, 0.2):
+            return None
+        entry = corner - incoming_dir * radius
+        exit_point = corner + outgoing_dir * radius
+        samples = max(2, int(smooth_samples))
+        replacement = []
+        for sample_idx in range(samples):
+            t = (sample_idx + 1) / float(samples + 1)
+            point = (1.0 - t) ** 2 * entry + 2.0 * (1.0 - t) * t * corner + t**2 * exit_point
+            replacement.append(point)
+        return [entry] + replacement + [exit_point]
+
+    def _replacement_has_clearance(self, prev_point, replacement, next_point, min_margin):
+        candidate = [np.asarray(prev_point, dtype=float)]
+        candidate.extend(np.asarray(point, dtype=float) for point in replacement)
+        candidate.append(np.asarray(next_point, dtype=float))
+        return self.path_has_min_margin(candidate, min_margin)
+
+    def _dedupe_path(self, path, min_distance=1e-6):
+        deduped = []
+        for point in path:
+            point = np.asarray(point, dtype=float)
+            if not deduped or np.linalg.norm(point - deduped[-1]) > min_distance:
+                deduped.append(point)
+        return deduped
+
+    def path_quality(self, path):
+        path = [np.asarray(point, dtype=float) for point in path]
+        if len(path) < 2:
+            return {
+                "points": len(path),
+                "min_segment": 0.0,
+                "max_segment": 0.0,
+                "max_angle_deg": 0.0,
+                "angles_over_30": 0,
+                "negative_dx_segments": 0,
+                "min_margin": float("inf"),
+            }
+        segments = [float(np.linalg.norm(path[idx + 1] - path[idx])) for idx in range(len(path) - 1)]
+        angles = []
+        for idx in range(1, len(path) - 1):
+            incoming = path[idx] - path[idx - 1]
+            outgoing = path[idx + 1] - path[idx]
+            incoming_len = float(np.linalg.norm(incoming))
+            outgoing_len = float(np.linalg.norm(outgoing))
+            if incoming_len <= 1e-9 or outgoing_len <= 1e-9:
+                continue
+            dot = float(np.clip(np.dot(incoming, outgoing) / (incoming_len * outgoing_len), -1.0, 1.0))
+            angles.append(math.degrees(math.acos(dot)))
+        return {
+            "points": len(path),
+            "min_segment": min(segments),
+            "max_segment": max(segments),
+            "max_angle_deg": max(angles) if angles else 0.0,
+            "angles_over_30": sum(1 for angle in angles if angle > 30.0),
+            "negative_dx_segments": sum(1 for idx in range(len(path) - 1) if path[idx + 1][0] < path[idx][0] - 1e-6),
+            "min_margin": self.path_min_margin(path),
+        }
 
     def first_lookahead(self, path, position, lookahead_distance=3.0):
         if not path:

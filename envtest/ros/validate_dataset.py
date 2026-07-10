@@ -41,6 +41,10 @@ REQUIRED_COLUMNS = [
     "candidate_min_clearance",
     "candidate_emergency_stop",
     "candidate_prediction_horizon",
+    "candidate_raw_selected_speed",
+    "candidate_yield_active",
+    "candidate_applied_speed",
+    "path_cross_track_error",
     "is_collide",
 ]
 
@@ -57,6 +61,8 @@ def validate_trajectory(
     min_nearest_margin=0.0,
     max_negative_actual_x_ratio=0.02,
     max_backtrack_distance=0.3,
+    max_path_cross_track_error=0.8,
+    max_applied_speed_accel=3.5,
 ):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
@@ -141,6 +147,10 @@ def validate_trajectory(
         "candidate_min_clearance",
         "candidate_emergency_stop",
         "candidate_prediction_horizon",
+        "candidate_raw_selected_speed",
+        "candidate_yield_active",
+        "candidate_applied_speed",
+        "path_cross_track_error",
         "desired_vel",
     }
     if candidate_fields.issubset(fieldnames):
@@ -152,18 +162,42 @@ def validate_trajectory(
             emergency_stops = np.asarray([int(float(row["candidate_emergency_stop"])) for row in rows])
             min_clearances = np.asarray([float(row["candidate_min_clearance"]) for row in rows])
             horizons = np.asarray([float(row["candidate_prediction_horizon"]) for row in rows])
+            raw_selected_speeds = np.asarray([float(row["candidate_raw_selected_speed"]) for row in rows])
+            yield_active = np.asarray([int(float(row["candidate_yield_active"])) for row in rows])
+            applied_speeds = np.asarray([float(row["candidate_applied_speed"]) for row in rows])
+            cross_track_errors = np.asarray([float(row["path_cross_track_error"]) for row in rows])
             slowdown_dynamic = np.asarray([float(row["v_slowdown_dynamic_x"]) for row in rows])
             slowdown_total = np.asarray([float(row["v_slowdown_x"]) for row in rows])
             avoidance_active = np.asarray([int(float(row["avoidance_active"])) for row in rows])
         except ValueError:
             errors.append(f"{path}: invalid candidate-speed diagnostics")
         else:
-            finite_values = np.concatenate((selected_speeds, desired_speeds, min_clearances, horizons))
+            finite_values = np.concatenate(
+                (
+                    selected_speeds,
+                    desired_speeds,
+                    min_clearances,
+                    horizons,
+                    raw_selected_speeds,
+                    applied_speeds,
+                    cross_track_errors,
+                )
+            )
             if not np.isfinite(finite_values).all():
                 errors.append(f"{path}: non-finite candidate-speed diagnostics")
             out_of_range = np.sum((selected_speeds < -1e-6) | (selected_speeds > desired_speeds + 1e-6))
             if out_of_range:
                 errors.append(f"{path}: candidate speed out-of-range rows {int(out_of_range)}")
+            raw_out_of_range = np.sum(
+                (raw_selected_speeds < -1e-6) | (raw_selected_speeds > desired_speeds + 1e-6)
+            )
+            if raw_out_of_range:
+                errors.append(f"{path}: raw candidate speed out-of-range rows {int(raw_out_of_range)}")
+            applied_out_of_range = np.sum(
+                (applied_speeds < -1e-6) | (applied_speeds > desired_speeds + 1e-6)
+            )
+            if applied_out_of_range:
+                errors.append(f"{path}: applied candidate speed out-of-range rows {int(applied_out_of_range)}")
             invalid_emergency = np.sum(
                 (emergency_stops != 0)
                 & ((selected_speeds > 1e-6) | (safe_counts > 1))
@@ -174,6 +208,7 @@ def validate_trajectory(
                 (desired_speeds > 1e-6)
                 & (selected_speeds <= 1e-6)
                 & (emergency_stops == 0)
+                & (yield_active == 0)
             )
             if missing_emergency:
                 errors.append(f"{path}: missing candidate emergency-stop rows {int(missing_emergency)}")
@@ -181,6 +216,26 @@ def validate_trajectory(
                 errors.append(f"{path}: invalid candidate safe count")
             if np.any(horizons <= 0.0):
                 errors.append(f"{path}: non-positive candidate prediction horizon")
+            if np.any((yield_active != 0) & (yield_active != 1)):
+                errors.append(f"{path}: invalid candidate yield state")
+            if np.any(cross_track_errors < -1e-6):
+                errors.append(f"{path}: negative path cross-track error")
+            elif len(cross_track_errors) and np.max(cross_track_errors) > max_path_cross_track_error:
+                errors.append(
+                    f"{path}: max path cross-track error {np.max(cross_track_errors):.3f}m "
+                    f"> {max_path_cross_track_error:.3f}m"
+                )
+            if len(rows) > 1:
+                timestamps_float = np.asarray([float(row["timestamp"]) for row in rows])
+                dt = np.diff(timestamps_float)
+                valid_dt = dt > 1e-4
+                applied_accel = np.zeros_like(dt)
+                applied_accel[valid_dt] = np.abs(np.diff(applied_speeds)[valid_dt] / dt[valid_dt])
+                if np.any(applied_accel[valid_dt] > max_applied_speed_accel):
+                    errors.append(
+                        f"{path}: max applied path-speed accel {np.max(applied_accel[valid_dt]):.3f}m/s^2 "
+                        f"> {max_applied_speed_accel:.3f}m/s^2"
+                    )
             expected_slowdown = np.zeros_like(selected_speeds)
             moving = desired_speeds > 1e-6
             expected_slowdown[moving] = 1.0 - selected_speeds[moving] / desired_speeds[moving]
@@ -254,6 +309,8 @@ def main():
     parser.add_argument("--min-nearest-margin", type=float, default=0.0)
     parser.add_argument("--max-negative-actual-x-ratio", type=float, default=0.02)
     parser.add_argument("--max-backtrack-distance", type=float, default=0.3)
+    parser.add_argument("--max-path-cross-track-error", type=float, default=0.8)
+    parser.add_argument("--max-applied-speed-accel", type=float, default=3.5)
     args = parser.parse_args()
 
     folders = sorted(p for p in glob.glob(os.path.join(args.dataset_dir, "*")) if os.path.isdir(p))
@@ -276,6 +333,8 @@ def main():
             min_nearest_margin=args.min_nearest_margin,
             max_negative_actual_x_ratio=args.max_negative_actual_x_ratio,
             max_backtrack_distance=args.max_backtrack_distance,
+            max_path_cross_track_error=args.max_path_cross_track_error,
+            max_applied_speed_accel=args.max_applied_speed_accel,
         )
         all_errors.extend(errors)
         rows += count

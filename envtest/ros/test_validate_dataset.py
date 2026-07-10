@@ -8,6 +8,7 @@ import unittest
 import cv2
 import numpy as np
 
+from dataset_log_utils import cleanup_orphan_depth_images
 from validate_dataset import REQUIRED_COLUMNS, validate_trajectory
 
 
@@ -28,6 +29,10 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
                 "candidate_min_clearance": 999.0,
                 "candidate_emergency_stop": 0,
                 "candidate_prediction_horizon": 3.0,
+                "candidate_raw_selected_speed": 5.0,
+                "candidate_yield_active": 0,
+                "candidate_applied_speed": 5.0,
+                "path_cross_track_error": 0.0,
             }
         )
         return row
@@ -74,6 +79,24 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
             max_backtrack_distance=0.3,
         )
         self.assertTrue(any("max continuous backtrack" in error for error in errors))
+
+    def test_rejects_applied_speed_acceleration_spike(self):
+        rows = [self.make_row("1.000"), self.make_row("1.100")]
+        rows[0]["candidate_applied_speed"] = 0.0
+        rows[1]["candidate_applied_speed"] = 1.0
+        errors = self.validate_rows(rows)
+        self.assertTrue(any("applied path-speed accel" in error for error in errors))
+
+    def test_cleanup_removes_orphan_depth_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            kept_path = os.path.join(folder, "1.0.png")
+            orphan_path = os.path.join(folder, "2.0.png")
+            cv2.imwrite(kept_path, np.ones((2, 2), dtype=np.uint8))
+            cv2.imwrite(orphan_path, np.ones((2, 2), dtype=np.uint8))
+            removed = cleanup_orphan_depth_images(folder, [1.0])
+            self.assertEqual(removed, [orphan_path])
+            self.assertTrue(os.path.exists(kept_path))
+            self.assertFalse(os.path.exists(orphan_path))
 
 
 if __name__ == "__main__":

@@ -84,6 +84,18 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         self.assertAlmostEqual(applied_speed, 0.3)
         self.assertAlmostEqual(command[0], 0.3)
 
+    def test_speed_controller_caps_initial_actual_speed(self):
+        controller = PathSpeedController(max_accel=3.0)
+        command, applied_speed = controller.apply(
+            5.0,
+            [1.0, 0.0, 0.0],
+            1.0,
+            [7.0, 0.0, 0.0],
+            speed_limit=5.0,
+        )
+        self.assertAlmostEqual(applied_speed, 5.0)
+        self.assertAlmostEqual(command[0], 5.0)
+
     def candidate_result(self, selected, safe_speeds, desired=5.0):
         evaluations = tuple(
             (speed, 0.5 if speed in safe_speeds else -0.5, speed in safe_speeds)

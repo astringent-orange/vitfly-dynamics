@@ -82,8 +82,10 @@ class PathSpeedController:
         self.previous_t = None
         self.previous_command = np.zeros(3)
 
-    def apply(self, target_speed, direction, t, actual_velocity):
+    def apply(self, target_speed, direction, t, actual_velocity, speed_limit=None):
         target_speed = max(0.0, float(target_speed))
+        speed_limit = float("inf") if speed_limit is None else max(0.0, float(speed_limit))
+        target_speed = min(target_speed, speed_limit)
         direction = np.asarray(direction, dtype=float)
         direction_norm = np.linalg.norm(direction)
         if direction_norm > 1e-6:
@@ -94,7 +96,9 @@ class PathSpeedController:
 
         if self.applied_speed is None or self.previous_t is None:
             actual_velocity = np.asarray(actual_velocity, dtype=float)
-            self.applied_speed = max(0.0, float(np.dot(actual_velocity, direction)))
+            self.applied_speed = float(
+                np.clip(np.dot(actual_velocity, direction), 0.0, speed_limit)
+            )
             self.previous_t = t
         elif t <= self.previous_t:
             return self.previous_command.copy(), float(self.applied_speed)
@@ -107,7 +111,7 @@ class PathSpeedController:
                     self.max_accel * dt,
                 )
             )
-            self.applied_speed = max(0.0, self.applied_speed + delta)
+            self.applied_speed = float(np.clip(self.applied_speed + delta, 0.0, speed_limit))
             self.previous_t = t
 
         command = direction * self.applied_speed

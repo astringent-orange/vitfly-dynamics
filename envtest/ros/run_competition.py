@@ -12,6 +12,7 @@ from std_msgs.msg import String
 from envsim_msgs.msg import ObstacleArray
 
 # from rl_example import load_rl_policy
+from dataset_log_utils import cleanup_orphan_depth_images
 from user_code import AStarDynamicExpert, compute_command_vision_based, compute_command_state_based, default_planner_info
 from utils import AgileCommandMode, AgileQuadState
 
@@ -58,6 +59,10 @@ PLANNER_FIELDS = [
     "candidate_min_clearance",
     "candidate_emergency_stop",
     "candidate_prediction_horizon",
+    "candidate_raw_selected_speed",
+    "candidate_yield_active",
+    "candidate_applied_speed",
+    "path_cross_track_error",
 ]
 
 
@@ -308,22 +313,14 @@ class AgilePilotNode:
         return [info[field] for field in PLANNER_FIELDS]
 
     def sanitize_data_log(self):
-        if not hasattr(self, "data_log") or self.data_log.empty:
+        if not hasattr(self, "data_log"):
             return
-        before_timestamps = {str(ts) for ts in self.data_log["timestamp"].tolist()}
         cleaned = self.data_log.drop_duplicates(subset=["timestamp"], keep="first")
         if "pos_x" in cleaned.columns:
             pos_x = pd.to_numeric(cleaned["pos_x"], errors="coerce")
             cleaned = cleaned[pos_x < self.data_collection_xrange[1]]
 
-        kept_timestamps = {str(ts) for ts in cleaned["timestamp"].tolist()}
-        for timestamp in before_timestamps - kept_timestamps:
-            image_path = f"{self.folder}/{timestamp}.png"
-            if os.path.exists(image_path):
-                try:
-                    os.remove(image_path)
-                except OSError as exc:
-                    print(f"[RUN_COMPETITION] Failed to remove dropped image {image_path}: {exc}")
+        cleanup_orphan_depth_images(self.folder, cleaned["timestamp"].tolist())
 
         self.data_log = cleaned.reset_index(drop=True)
         self.saved_timestamps = set()

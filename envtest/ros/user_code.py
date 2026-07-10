@@ -182,6 +182,10 @@ def default_planner_info():
         "candidate_min_clearance": 0.0,
         "candidate_emergency_stop": 0,
         "candidate_prediction_horizon": 0.0,
+        "candidate_raw_selected_speed": 0.0,
+        "candidate_yield_active": 0,
+        "candidate_applied_speed": 0.0,
+        "path_cross_track_error": 0.0,
     }
 
 
@@ -577,6 +581,7 @@ class AStarDynamicExpert:
             path_direction,
             state.t,
             drone_velocity,
+            speed_limit=desiredVel,
         )
 
         dynamic_slowdown = 0.0 if desiredVel <= 1e-6 else 1.0 - selected_speed / desiredVel
@@ -608,6 +613,8 @@ class AStarDynamicExpert:
                 "candidate_prediction_horizon": self.candidate_planner.horizon,
                 "candidate_raw_selected_speed": candidate_result.selected_speed,
                 "candidate_yield_active": int(yield_active),
+                "candidate_applied_speed": applied_speed,
+                "path_cross_track_error": cross_track_error,
             }
         )
         info.update(dynamic_info)

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from candidate_speed_planner import CandidateSpeedPlanner
+from candidate_speed_planner import CandidateSpeedPlanner, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicTrajectory
 
 
@@ -63,6 +63,26 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         candidates = self.planner.candidate_speeds(5.0)
         self.assertTrue(np.all(candidates >= 0.0))
         self.assertAlmostEqual(candidates[-1], 5.0)
+
+    def test_arc_length_reference_keeps_intermediate_corner(self):
+        path = PolylinePath([[0.0, 0.0, 3.0], [5.0, 0.0, 3.0], [5.0, 5.0, 3.0]])
+        reference = path.reference_from([4.5, 0.0, 3.0], 1.2)
+        np.testing.assert_allclose(reference["reference"], [5.0, 0.7, 3.0], atol=1e-6)
+        self.assertAlmostEqual(reference["cross_track_error"], 0.0)
+
+    def test_speed_controller_reuses_command_for_same_timestamp(self):
+        controller = PathSpeedController(max_accel=3.0)
+        first, first_speed = controller.apply(5.0, [1.0, 0.0, 0.0], 1.0, [2.0, 0.0, 0.0])
+        repeated, repeated_speed = controller.apply(0.0, [1.0, 0.0, 0.0], 1.0, [2.0, 0.0, 0.0])
+        np.testing.assert_allclose(repeated, first)
+        self.assertAlmostEqual(repeated_speed, first_speed)
+
+    def test_speed_controller_matches_prediction_acceleration(self):
+        controller = PathSpeedController(max_accel=3.0)
+        controller.apply(5.0, [1.0, 0.0, 0.0], 1.0, [0.0, 0.0, 0.0])
+        command, applied_speed = controller.apply(5.0, [1.0, 0.0, 0.0], 1.1, [0.0, 0.0, 0.0])
+        self.assertAlmostEqual(applied_speed, 0.3)
+        self.assertAlmostEqual(command[0], 0.3)
 
     def test_loop_trajectory_position_and_velocity_are_finite(self):
         trajectory = DynamicTrajectory(

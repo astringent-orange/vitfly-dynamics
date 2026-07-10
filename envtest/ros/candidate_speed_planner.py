@@ -14,6 +14,52 @@ class CandidateSpeedResult:
     initial_path_speed: float
 
 
+class PathSpeedController:
+    def __init__(self, max_accel=3.0):
+        self.max_accel = float(max_accel)
+        if self.max_accel <= 0.0:
+            raise ValueError("max_accel must be positive")
+        self.reset()
+
+    def reset(self):
+        self.applied_speed = None
+        self.previous_t = None
+        self.previous_command = np.zeros(3)
+
+    def apply(self, target_speed, direction, t, actual_velocity):
+        target_speed = max(0.0, float(target_speed))
+        direction = np.asarray(direction, dtype=float)
+        direction_norm = np.linalg.norm(direction)
+        if direction_norm > 1e-6:
+            direction = direction / direction_norm
+        else:
+            direction = np.array([1.0, 0.0, 0.0])
+        t = float(t)
+
+        if self.applied_speed is None or self.previous_t is None:
+            actual_velocity = np.asarray(actual_velocity, dtype=float)
+            self.applied_speed = max(0.0, float(np.dot(actual_velocity, direction)))
+            self.previous_t = t
+        elif t <= self.previous_t:
+            return self.previous_command.copy(), float(self.applied_speed)
+        else:
+            dt = t - self.previous_t
+            delta = float(
+                np.clip(
+                    target_speed - self.applied_speed,
+                    -self.max_accel * dt,
+                    self.max_accel * dt,
+                )
+            )
+            self.applied_speed = max(0.0, self.applied_speed + delta)
+            self.previous_t = t
+
+        command = direction * self.applied_speed
+        command[0] = max(0.0, command[0])
+        self.previous_command = command.copy()
+        return command, float(self.applied_speed)
+
+
 class PolylinePath:
     def __init__(self, points):
         raw_points = np.asarray(points, dtype=float)
@@ -74,6 +120,22 @@ class PolylinePath:
         idx = int(np.searchsorted(self.cumulative_lengths, progress, side="right") - 1)
         idx = int(np.clip(idx, 0, len(self.segment_lengths) - 1))
         return self.segment_vectors[idx] / self.segment_lengths[idx]
+
+    def reference_from(self, position, lookahead_distance):
+        progress, projected, tangent = self.project(position)
+        reference_progress = min(self.length, progress + max(0.0, float(lookahead_distance)))
+        reference = self.position_at(reference_progress)
+        reference_tangent = self.tangent_at(reference_progress)
+        cross_track_error = float(np.linalg.norm(np.asarray(position, dtype=float) - projected))
+        return {
+            "progress": progress,
+            "projected": projected,
+            "tangent": tangent,
+            "reference_progress": reference_progress,
+            "reference": reference,
+            "reference_tangent": reference_tangent,
+            "cross_track_error": cross_track_error,
+        }
 
 
 class CandidateSpeedPlanner:

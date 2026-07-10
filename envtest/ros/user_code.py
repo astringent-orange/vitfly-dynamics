@@ -16,7 +16,7 @@ if torch is not None:
     from model import *
 
 from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
-from candidate_speed_planner import CandidateSpeedPlanner
+from candidate_speed_planner import CandidateSpeedPlanner, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
@@ -192,12 +192,10 @@ class AStarDynamicExpert:
         resolution=0.3,
         inflation_radius=DEFAULT_STATIC_INFLATION,
         goal=(60.0, 0.0, 3.0),
-        lookahead_distance=3.5,
+        lookahead_distance=1.2,
         static_speed_threshold=0.5,
         track_match_distance=2.0,
         track_max_misses=3,
-        max_cmd_accel=5.0,
-        cmd_smoothing=0.7,
         path_cache=None,
         candidate_prediction_horizon=3.0,
         candidate_prediction_dt=0.1,
@@ -223,8 +221,6 @@ class AStarDynamicExpert:
         self.static_speed_threshold = static_speed_threshold
         self.track_match_distance = track_match_distance
         self.track_max_misses = track_max_misses
-        self.max_cmd_accel = max_cmd_accel
-        self.cmd_smoothing = cmd_smoothing
         self.goal_gate_distance = goal_gate_distance
         self.goal_slowdown_distance = goal_slowdown_distance
         self.candidate_planner = CandidateSpeedPlanner(
@@ -234,15 +230,15 @@ class AStarDynamicExpert:
             safety_margin=candidate_safety_margin,
             candidate_step=candidate_step,
         )
+        self.speed_controller = PathSpeedController(candidate_prediction_accel)
         self.path = []
+        self.path_polyline = None
         self.path_index = 0
         self.replan_count = 0
         self.last_plan_time = 0.0
         self.tracks = []
         self.next_track_id = 1
         self.prev_t = None
-        self.prev_cmd = None
-        self.prev_cmd_t = None
         self.dynamic_predictor = self._make_dynamic_predictor()
         print("[AStarDynamicExpert] Candidate-speed dynamic planner enabled")
 
@@ -279,11 +275,11 @@ class AStarDynamicExpert:
 
     def reset_path(self):
         self.path = []
+        self.path_polyline = None
         self.path_index = 0
         self.tracks = []
         self.prev_t = None
-        self.prev_cmd = None
-        self.prev_cmd_t = None
+        self.speed_controller.reset()
 
     def _make_command(self, state, velocity):
         command = AgileCommand(AgileCommandMode.LINVEL)
@@ -305,6 +301,8 @@ class AStarDynamicExpert:
                 self.path_index = 0
                 self.last_plan_time = time.time() - start_time
             self.replan_count += 1
+            if self.path:
+                self.path_polyline = PolylinePath(self.path)
         return len(self.path) > 0
 
     def _relative_obstacle_measurements(self, obstacles, max_distance="dynamic", forward_only=True):
@@ -504,44 +502,6 @@ class AStarDynamicExpert:
                 return predictions
         return self._linear_obstacle_predictions(state, rel_obstacles)
 
-    def _lookahead_on_path(self, position):
-        if not self.path:
-            return np.asarray(position, dtype=float)
-
-        while self.path_index < len(self.path) - 1:
-            if np.linalg.norm(np.asarray(self.path[self.path_index]) - position) > 1.0:
-                break
-            self.path_index += 1
-
-        lookahead = np.asarray(self.path[-1], dtype=float)
-        for idx in range(self.path_index, len(self.path)):
-            point = np.asarray(self.path[idx], dtype=float)
-            if point[0] < position[0] - 0.2:
-                self.path_index = min(idx + 1, len(self.path) - 1)
-                continue
-            if np.linalg.norm(point - position) >= self.lookahead_distance:
-                lookahead = point
-                self.path_index = idx
-                break
-        return lookahead
-
-    def _smooth_command(self, raw_cmd, t, desiredVel):
-        raw_cmd = limit_norm(raw_cmd, desiredVel)
-        if self.prev_cmd is None or self.prev_cmd_t is None or t <= self.prev_cmd_t:
-            self.prev_cmd = raw_cmd.copy()
-            self.prev_cmd_t = t
-            return raw_cmd
-
-        dt = max(t - self.prev_cmd_t, 1e-3)
-        max_delta = self.max_cmd_accel * dt
-        delta = limit_norm(raw_cmd - self.prev_cmd, max_delta)
-        accel_limited = self.prev_cmd + delta
-        smoothed = self.cmd_smoothing * self.prev_cmd + (1.0 - self.cmd_smoothing) * accel_limited
-        smoothed = limit_norm(smoothed, desiredVel)
-        self.prev_cmd = smoothed.copy()
-        self.prev_cmd_t = t
-        return smoothed
-
     def compute_command(self, state, obstacles, desiredVel, dynamic_obstacles=None):
         pos = np.asarray(state.pos, dtype=float)
         if pos[0] >= self.goal[0]:
@@ -555,19 +515,16 @@ class AStarDynamicExpert:
                 }
             )
             return self._make_command(state, np.zeros(3)), info
-        if pos[0] < 0.5:
-            self.reset_path()
-
         astar_success = self._ensure_path(pos)
         if astar_success:
-            lookahead = self._lookahead_on_path(pos)
+            path_reference = self.path_polyline.reference_from(pos, self.lookahead_distance)
+            lookahead = path_reference["reference"]
             path_vec = lookahead - pos
-            v_path = limit_norm(path_vec, desiredVel)
-            if np.linalg.norm(v_path) > 1e-6:
-                v_path = v_path / np.linalg.norm(v_path) * desiredVel
+            cross_track_error = path_reference["cross_track_error"]
         else:
             lookahead = np.array([pos[0] + 4.0, 0.0, 3.0])
-            v_path = np.array([desiredVel, 0.0, 0.0])
+            path_vec = lookahead - pos
+            cross_track_error = 0.0
 
         drone_velocity = np.asarray(state.vel, dtype=float)
         all_measurements = self._relative_obstacle_measurements(obstacles, max_distance=None, forward_only=False)
@@ -586,7 +543,7 @@ class AStarDynamicExpert:
         dynamic_info = self._dynamic_diagnostics(rel_obstacles)
         nearest_margin, nearest_static_dist = self._obstacle_diagnostics(all_measurements, dynamic_measurements)
         obstacle_predictions = self._dynamic_predictions(state, dynamic_obstacles, rel_obstacles)
-        candidate_path = self.path if self.path else [pos, self.goal]
+        candidate_path = self.path_polyline if self.path_polyline is not None else PolylinePath([pos, self.goal])
         candidate_result = self.candidate_planner.select_speed(
             candidate_path,
             pos,
@@ -597,20 +554,27 @@ class AStarDynamicExpert:
 
         remaining_to_goal = self.goal[0] - pos[0]
         selected_speed = candidate_result.selected_speed
+        if cross_track_error > 0.4:
+            recovery_ratio = float(np.clip((0.8 - cross_track_error) / 0.4, 0.0, 1.0))
+            recovery_cap = max(1.0, desiredVel * recovery_ratio)
+            selected_speed = min(selected_speed, recovery_cap)
         if 0.0 < remaining_to_goal < self.goal_slowdown_distance:
             max_goal_speed = desiredVel * max(0.2, remaining_to_goal / self.goal_slowdown_distance)
             selected_speed = min(selected_speed, max_goal_speed)
 
-        path_direction = path_vec / max(np.linalg.norm(path_vec), 1e-6)
+        if np.linalg.norm(path_vec) > 1e-6:
+            path_direction = path_vec / np.linalg.norm(path_vec)
+        elif astar_success:
+            path_direction = path_reference["reference_tangent"]
+        else:
+            path_direction = np.array([1.0, 0.0, 0.0])
         v_path = path_direction * selected_speed
-        v_cmd = v_path.copy()
-        v_cmd[0] = max(0.0, v_cmd[0])
-        v_cmd = self._smooth_command(v_cmd, state.t, desiredVel)
-        v_cmd[0] = max(0.0, v_cmd[0])
-        self.prev_cmd[0] = v_cmd[0]
-        if 0.0 < remaining_to_goal < self.goal_slowdown_distance:
-            max_goal_speed = desiredVel * max(0.2, remaining_to_goal / self.goal_slowdown_distance)
-            v_cmd[0] = min(v_cmd[0], max_goal_speed)
+        v_cmd, applied_speed = self.speed_controller.apply(
+            selected_speed,
+            path_direction,
+            state.t,
+            drone_velocity,
+        )
 
         dynamic_slowdown = 0.0 if desiredVel <= 1e-6 else 1.0 - candidate_result.selected_speed / desiredVel
         dynamic_slowdown = float(np.clip(dynamic_slowdown, 0.0, 1.0))

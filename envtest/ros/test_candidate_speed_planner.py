@@ -123,21 +123,42 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         self.assertTrue(active)
 
         full_safe = self.candidate_result(5.0, list(np.linspace(0.0, 5.0, 11)))
-        self.assertEqual(policy.apply(full_safe, 5.0), (2.5, True))
-        self.assertEqual(policy.apply(full_safe, 5.0), (2.5, True))
+        self.assertEqual(policy.apply(full_safe, 5.0), (3.0, True))
+        self.assertEqual(policy.apply(full_safe, 5.0), (3.5, True))
         self.assertEqual(policy.apply(full_safe, 5.0), (5.0, False))
 
-    def test_yield_policy_does_not_switch_to_faster_safe_candidate(self):
+    def test_yield_policy_recovers_one_safe_candidate_level_at_a_time(self):
         policy = CandidateYieldPolicy()
         policy.apply(self.candidate_result(2.5, [0.0, 1.0, 2.0, 2.5]), 5.0)
         result = self.candidate_result(4.0, [0.0, 1.0, 2.0, 3.0, 4.0])
-        self.assertEqual(policy.apply(result, 5.0), (2.0, True))
+        self.assertEqual(policy.apply(result, 5.0), (3.0, True))
 
     def test_yield_policy_stops_when_no_candidate_is_safe(self):
         policy = CandidateYieldPolicy()
         policy.apply(self.candidate_result(2.0, [0.0, 1.0, 2.0]), 5.0)
         result = self.candidate_result(0.0, [])
         self.assertEqual(policy.apply(result, 5.0), (0.0, True))
+
+    def test_yield_policy_requires_two_positive_safe_frames_before_resuming(self):
+        policy = CandidateYieldPolicy(resume_frames=2)
+        policy.apply(self.candidate_result(2.0, [0.0, 1.0, 2.0]), 5.0)
+        emergency = self.candidate_result(0.0, [])
+        self.assertEqual(policy.apply(emergency, 5.0), (0.0, True))
+
+        slow_safe = self.candidate_result(0.5, [0.0, 0.5])
+        self.assertEqual(policy.apply(slow_safe, 5.0), (0.0, True))
+        self.assertEqual(policy.apply(slow_safe, 5.0), (0.5, True))
+
+    def test_yield_policy_resets_resume_confirmation_when_safety_is_lost(self):
+        policy = CandidateYieldPolicy(resume_frames=2)
+        policy.apply(self.candidate_result(2.0, [0.0, 1.0, 2.0]), 5.0)
+        emergency = self.candidate_result(0.0, [])
+        slow_safe = self.candidate_result(0.5, [0.0, 0.5])
+        self.assertEqual(policy.apply(emergency, 5.0), (0.0, True))
+        self.assertEqual(policy.apply(slow_safe, 5.0), (0.0, True))
+        self.assertEqual(policy.apply(emergency, 5.0), (0.0, True))
+        self.assertEqual(policy.apply(slow_safe, 5.0), (0.0, True))
+        self.assertEqual(policy.apply(slow_safe, 5.0), (0.5, True))
 
     def test_loop_trajectory_position_and_velocity_are_finite(self):
         trajectory = DynamicTrajectory(

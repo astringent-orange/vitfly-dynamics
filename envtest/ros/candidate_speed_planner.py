@@ -25,21 +25,26 @@ class CandidateSpeedResult:
 
 
 class CandidateYieldPolicy:
-    def __init__(self, release_frames=5):
+    def __init__(self, release_frames=5, resume_frames=2):
         self.release_frames = int(release_frames)
         if self.release_frames <= 0:
             raise ValueError("release_frames must be positive")
+        self.resume_frames = int(resume_frames)
+        if self.resume_frames <= 0:
+            raise ValueError("resume_frames must be positive")
         self.reset()
 
     def reset(self):
         self.active = False
         self.target_speed = 0.0
         self.full_speed_safe_frames = 0
+        self.positive_safe_frames = 0
 
     def apply(self, result, desired_speed):
         desired_speed = max(0.0, float(desired_speed))
         raw_speed = max(0.0, float(result.selected_speed))
         safe_speeds = sorted(float(speed) for speed in result.safe_speeds)
+        positive_safe = [speed for speed in safe_speeds if speed > 1e-6]
         full_speed_safe = any(abs(speed - desired_speed) <= 1e-6 for speed in safe_speeds)
 
         if not self.active:
@@ -47,6 +52,13 @@ class CandidateYieldPolicy:
             if raw_speed < desired_speed - 1e-6:
                 self.active = True
                 self.full_speed_safe_frames = 0
+                self.positive_safe_frames = 0
+            return self.target_speed, self.active
+
+        if not positive_safe:
+            self.target_speed = 0.0
+            self.full_speed_safe_frames = 0
+            self.positive_safe_frames = 0
             return self.target_speed, self.active
 
         if full_speed_safe:
@@ -58,15 +70,23 @@ class CandidateYieldPolicy:
             self.active = False
             self.target_speed = desired_speed
             self.full_speed_safe_frames = 0
+            self.positive_safe_frames = 0
             return self.target_speed, self.active
 
+        if self.target_speed <= 1e-6:
+            self.positive_safe_frames += 1
+            if self.positive_safe_frames < self.resume_frames:
+                return 0.0, self.active
+            self.target_speed = min(positive_safe)
+            return self.target_speed, self.active
+
+        self.positive_safe_frames = 0
         nonincreasing_safe = [speed for speed in safe_speeds if speed <= self.target_speed + 1e-6]
         if nonincreasing_safe:
             self.target_speed = max(nonincreasing_safe)
-        elif safe_speeds:
-            self.target_speed = min(safe_speeds)
-        else:
-            self.target_speed = 0.0
+        faster_safe = [speed for speed in positive_safe if speed > self.target_speed + 1e-6]
+        if faster_safe:
+            self.target_speed = min(faster_safe)
         return self.target_speed, self.active
 
 

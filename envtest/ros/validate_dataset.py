@@ -53,6 +53,18 @@ REQUIRED_COLUMNS = [
 ENV_COLUMNS = ["env_level", "env_folder", "env_seed"]
 
 
+def _max_consecutive_true(values):
+    longest = 0
+    current = 0
+    for value in values:
+        if value:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
 def validate_trajectory(
     path,
     require_env_fields=False,
@@ -65,6 +77,7 @@ def validate_trajectory(
     max_backtrack_distance=0.3,
     max_path_cross_track_error=0.8,
     max_applied_speed_accel=3.5,
+    max_yield_zero_positive_frames=2,
 ):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
@@ -230,6 +243,18 @@ def validate_trajectory(
                 errors.append(f"{path}: non-positive candidate prediction horizon")
             if np.any((yield_active != 0) & (yield_active != 1)):
                 errors.append(f"{path}: invalid candidate yield state")
+            held_zero_with_positive_safe = (
+                (selected_speeds <= 1e-6)
+                & (emergency_stops == 0)
+                & (safe_counts > 1)
+                & (yield_active != 0)
+            )
+            max_held_zero_frames = _max_consecutive_true(held_zero_with_positive_safe)
+            if max_held_zero_frames > max_yield_zero_positive_frames:
+                errors.append(
+                    f"{path}: yield policy held zero after positive safe candidate for "
+                    f"{max_held_zero_frames} frames > {max_yield_zero_positive_frames}"
+                )
             if np.any(cross_track_errors < -1e-6):
                 errors.append(f"{path}: negative path cross-track error")
             elif len(cross_track_errors) and np.max(cross_track_errors) > max_path_cross_track_error:

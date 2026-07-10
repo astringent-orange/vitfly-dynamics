@@ -70,6 +70,20 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
         errors = self.validate_rows([row], max_low_speed_ratio=1.0)
         self.assertTrue(any("missing candidate emergency-stop" in error for error in errors))
 
+    def test_rejects_yield_holding_zero_after_positive_safe_candidate(self):
+        rows = [self.make_row(f"{idx}.000") for idx in range(3)]
+        for row in rows:
+            row["candidate_selected_speed"] = 0.0
+            row["candidate_safe_count"] = 2
+            row["candidate_emergency_stop"] = 0
+            row["candidate_yield_active"] = 1
+            row["candidate_applied_speed"] = 0.0
+            row["v_slowdown_x"] = 1.0
+            row["v_slowdown_dynamic_x"] = 1.0
+            row["avoidance_active"] = 1
+        errors = self.validate_rows(rows, max_low_speed_ratio=1.0)
+        self.assertTrue(any("yield policy held zero" in error for error in errors))
+
     def test_rejects_excessive_actual_backtrack(self):
         rows = [self.make_row(f"{idx}.000") for idx in range(4)]
         for idx, row in enumerate(rows):

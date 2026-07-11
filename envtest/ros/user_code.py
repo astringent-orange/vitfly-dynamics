@@ -10,6 +10,7 @@ except ImportError:
 
 import glob, os, sys, time
 from os.path import join as opj
+import yaml
 
 sys.path.append(opj(os.path.dirname(os.path.abspath(__file__)), '../../models'))
 if torch is not None:
@@ -18,6 +19,35 @@ if torch is not None:
 from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
 from candidate_speed_planner import CandidateSpeedPlanner, CandidateYieldPolicy, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
+
+
+DEFAULT_EXPERT_DYNAMICS = {
+    "control_delay": 0.25,
+    "max_accel": 3.0,
+    "max_brake_decel": 1.5,
+    "reverse_drift_distance": 0.4,
+    "cross_track_decay_time": 0.8,
+}
+
+
+def load_expert_dynamics(config_path=None):
+    config_path = config_path or opj(os.path.dirname(os.path.abspath(__file__)), "expert_dynamics.yaml")
+    values = DEFAULT_EXPERT_DYNAMICS.copy()
+    try:
+        with open(config_path, "r") as stream:
+            loaded = yaml.safe_load(stream) or {}
+        for key in values:
+            if key in loaded:
+                values[key] = float(loaded[key])
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        print(f"[AStarDynamicExpert] Using fallback dynamics values: {exc}")
+    if values["max_accel"] <= 0.0 or values["max_brake_decel"] <= 0.0:
+        raise ValueError("expert dynamics acceleration limits must be positive")
+    if values["control_delay"] < 0.0 or values["reverse_drift_distance"] < 0.0:
+        raise ValueError("expert dynamics delay and reverse-drift buffer must be nonnegative")
+    if values["cross_track_decay_time"] <= 0.0:
+        raise ValueError("expert dynamics cross-track decay time must be positive")
+    return values
 
 # 3D line determined by two points (x1, y1, z1) and (x2, y2, z2)
 # sphere determined by a center point (x3, y3, z3) and radius r
@@ -188,6 +218,11 @@ def default_planner_info():
         "path_cross_track_error": 0.0,
         "path_turn_angle_deg": 0.0,
         "path_speed_ceiling": 0.0,
+        "candidate_control_delay": 0.0,
+        "candidate_brake_decel": 0.0,
+        "candidate_reverse_drift_buffer": 0.0,
+        "candidate_initial_path_speed": 0.0,
+        "candidate_predicted_stop_distance": 0.0,
     }
 
 
@@ -205,7 +240,8 @@ class AStarDynamicExpert:
         path_cache=None,
         candidate_prediction_horizon=2.2,
         candidate_prediction_dt=0.1,
-        candidate_prediction_accel=3.0,
+        candidate_prediction_accel=None,
+        dynamics_config_path=None,
         candidate_safety_margin=1.0,
         candidate_step=0.1,
         turn_preview_distance=2.5,
@@ -239,14 +275,21 @@ class AStarDynamicExpert:
         self.sharp_turn_angle_deg = float(sharp_turn_angle_deg)
         self.medium_turn_speed = float(medium_turn_speed)
         self.sharp_turn_speed = float(sharp_turn_speed)
+        self.expert_dynamics = load_expert_dynamics(dynamics_config_path)
+        if candidate_prediction_accel is not None:
+            self.expert_dynamics["max_accel"] = float(candidate_prediction_accel)
         self.candidate_planner = CandidateSpeedPlanner(
             horizon=candidate_prediction_horizon,
             prediction_dt=candidate_prediction_dt,
-            prediction_accel=candidate_prediction_accel,
+            max_accel=self.expert_dynamics["max_accel"],
+            max_brake_decel=self.expert_dynamics["max_brake_decel"],
+            control_delay=self.expert_dynamics["control_delay"],
+            reverse_drift_distance=self.expert_dynamics["reverse_drift_distance"],
+            cross_track_decay_time=self.expert_dynamics["cross_track_decay_time"],
             safety_margin=candidate_safety_margin,
             candidate_step=candidate_step,
         )
-        self.speed_controller = PathSpeedController(candidate_prediction_accel)
+        self.speed_controller = PathSpeedController(self.expert_dynamics["max_accel"])
         self.yield_policy = CandidateYieldPolicy(release_frames=5)
         self.path = []
         self.path_polyline = None
@@ -316,6 +359,8 @@ class AStarDynamicExpert:
         self.last_planner_info = None
         self.speed_controller.reset()
         self.yield_policy.reset()
+        if self.dynamic_predictor is not None:
+            self.dynamic_predictor.reset_calibration()
 
     def _make_command(self, state, velocity):
         command = AgileCommand(AgileCommandMode.LINVEL)
@@ -680,6 +725,11 @@ class AStarDynamicExpert:
                 "path_cross_track_error": cross_track_error,
                 "path_turn_angle_deg": path_turn_angle_deg,
                 "path_speed_ceiling": path_speed_ceiling,
+                "candidate_control_delay": self.candidate_planner.control_delay,
+                "candidate_brake_decel": self.candidate_planner.max_brake_decel,
+                "candidate_reverse_drift_buffer": self.candidate_planner.reverse_drift_distance,
+                "candidate_initial_path_speed": candidate_result.initial_path_speed,
+                "candidate_predicted_stop_distance": candidate_result.predicted_stop_distance,
             }
         )
         info.update(dynamic_info)

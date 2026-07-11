@@ -35,6 +35,11 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
                 "path_cross_track_error": 0.0,
                 "path_turn_angle_deg": 0.0,
                 "path_speed_ceiling": 5.0,
+                "candidate_control_delay": 0.25,
+                "candidate_brake_decel": 1.5,
+                "candidate_reverse_drift_buffer": 0.4,
+                "candidate_initial_path_speed": 5.0,
+                "candidate_predicted_stop_distance": 9.9833333333,
             }
         )
         return row

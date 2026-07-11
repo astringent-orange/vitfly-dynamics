@@ -47,10 +47,15 @@ REQUIRED_COLUMNS = [
     "path_cross_track_error",
     "path_turn_angle_deg",
     "path_speed_ceiling",
+    "candidate_control_delay",
+    "candidate_brake_decel",
+    "candidate_reverse_drift_buffer",
+    "candidate_initial_path_speed",
+    "candidate_predicted_stop_distance",
     "is_collide",
 ]
 
-ENV_COLUMNS = ["env_level", "env_folder", "env_seed"]
+ENV_COLUMNS = ["env_level", "env_folder", "env_seed", "dynamic_phase_seed", "dynamic_phase_mode"]
 
 
 def _max_consecutive_true(values):
@@ -185,6 +190,11 @@ def validate_trajectory(
             cross_track_errors = np.asarray([float(row["path_cross_track_error"]) for row in rows])
             turn_angles = np.asarray([float(row["path_turn_angle_deg"]) for row in rows])
             path_speed_ceilings = np.asarray([float(row["path_speed_ceiling"]) for row in rows])
+            control_delays = np.asarray([float(row["candidate_control_delay"]) for row in rows])
+            brake_decels = np.asarray([float(row["candidate_brake_decel"]) for row in rows])
+            reverse_drift_buffers = np.asarray([float(row["candidate_reverse_drift_buffer"]) for row in rows])
+            initial_path_speeds = np.asarray([float(row["candidate_initial_path_speed"]) for row in rows])
+            predicted_stop_distances = np.asarray([float(row["candidate_predicted_stop_distance"]) for row in rows])
             slowdown_dynamic = np.asarray([float(row["v_slowdown_dynamic_x"]) for row in rows])
             slowdown_total = np.asarray([float(row["v_slowdown_x"]) for row in rows])
             avoidance_active = np.asarray([int(float(row["avoidance_active"])) for row in rows])
@@ -202,6 +212,11 @@ def validate_trajectory(
                     cross_track_errors,
                     turn_angles,
                     path_speed_ceilings,
+                    control_delays,
+                    brake_decels,
+                    reverse_drift_buffers,
+                    initial_path_speeds,
+                    predicted_stop_distances,
                 )
             )
             if not np.isfinite(finite_values).all():
@@ -241,6 +256,10 @@ def validate_trajectory(
                 errors.append(f"{path}: invalid candidate safe count")
             if np.any(horizons <= 0.0):
                 errors.append(f"{path}: non-positive candidate prediction horizon")
+            if np.any(control_delays < 0.0) or np.any(brake_decels <= 0.0) or np.any(reverse_drift_buffers < 0.0):
+                errors.append(f"{path}: invalid candidate braking diagnostics")
+            if np.any(predicted_stop_distances < reverse_drift_buffers - 1e-6):
+                errors.append(f"{path}: invalid candidate predicted stop distance")
             if np.any((yield_active != 0) & (yield_active != 1)):
                 errors.append(f"{path}: invalid candidate yield state")
             held_zero_with_positive_safe = (

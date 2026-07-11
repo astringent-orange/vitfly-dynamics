@@ -1,0 +1,6 @@
+# Conservative fallback values. calibrate_dynamics.py replaces these from measured runs.
+control_delay: 0.25
+max_accel: 3.0
+max_brake_decel: 1.5
+reverse_drift_distance: 0.4
+cross_track_decay_time: 0.8

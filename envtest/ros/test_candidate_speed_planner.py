@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 from candidate_speed_planner import CandidateSpeedPlanner, CandidateSpeedResult, CandidateYieldPolicy, PathSpeedController, PolylinePath
-from dynamic_obstacle_predictor import DynamicTrajectory
+from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor, DynamicTrajectory
 
 
 class CandidateSpeedPlannerTest(unittest.TestCase):
@@ -58,6 +58,29 @@ class CandidateSpeedPlannerTest(unittest.TestCase):
         )
         self.assertAlmostEqual(initial_speed, -1.0)
         self.assertLess(positions[1, 0], positions[0, 0])
+
+    def test_control_delay_holds_initial_speed_before_response(self):
+        planner = CandidateSpeedPlanner(control_delay=0.2, prediction_dt=0.1, reverse_drift_distance=0.0)
+        positions, _ = planner.predict_drone_trajectory(
+            self.path, self.position, np.array([2.0, 0.0, 0.0]), 0.0
+        )
+        self.assertAlmostEqual(positions[1, 0], 0.2)
+        self.assertAlmostEqual(positions[2, 0], 0.4)
+
+    def test_zero_candidate_adds_reverse_drift_buffer(self):
+        planner = CandidateSpeedPlanner(control_delay=0.1, reverse_drift_distance=0.4)
+        positions, _ = planner.predict_drone_trajectory(
+            self.path, np.array([5.0, 0.0, 3.0]), np.zeros(3), 0.0
+        )
+        self.assertLess(positions[1, 0], 5.0)
+        self.assertGreaterEqual(planner.predicted_stop_distance(4.0), 0.4)
+
+    def test_seeded_phase_mapping_is_repeatable(self):
+        first = DynamicObstacleTrajectoryPredictor.phase_from_seed(1000, 3, 8.0)
+        second = DynamicObstacleTrajectoryPredictor.phase_from_seed(1000, 3, 8.0)
+        self.assertAlmostEqual(first, second)
+        self.assertGreaterEqual(first, 0.0)
+        self.assertLess(first, 8.0)
 
     def test_candidate_targets_are_never_negative(self):
         candidates = self.planner.candidate_speeds(5.0)

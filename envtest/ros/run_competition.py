@@ -66,6 +66,11 @@ PLANNER_FIELDS = [
     "path_cross_track_error",
     "path_turn_angle_deg",
     "path_speed_ceiling",
+    "candidate_control_delay",
+    "candidate_brake_decel",
+    "candidate_reverse_drift_buffer",
+    "candidate_initial_path_speed",
+    "candidate_predicted_stop_distance",
 ]
 
 
@@ -99,6 +104,8 @@ class AgilePilotNode:
                            'env_level':[],
                            'env_folder':[],
                            'env_seed':[],
+                           'dynamic_phase_seed':[],
+                           'dynamic_phase_mode':[],
                            'quat_1':[],
                            'quat_2':[],
                            'quat_3':[],
@@ -134,13 +141,15 @@ class AgilePilotNode:
         self.env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
         self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
+        self.dynamic_phase_seed = os.environ.get("VITFLY_DYNAMIC_PHASE_SEED", self.env_seed)
+        self.dynamic_phase_mode = "seeded_reset"
         atexit.register(self.flush_data_log)
         rospy.on_shutdown(self.shutdown_callback)
 
         self.desiredVel = desVel #self.readVel("velocity.txt") #np.random.uniform(low=2.0, high=3.0)
         print()
         print(f"[RUN_COMPETITION] Desired velocity = {self.desiredVel}")
-        print(f"[RUN_COMPETITION] Environment = {self.env_level}/{self.env_folder} seed={self.env_seed}")
+        print(f"[RUN_COMPETITION] Environment = {self.env_level}/{self.env_folder} seed={self.env_seed} phase_seed={self.dynamic_phase_seed}")
         print()
 
         self.state_expert = None
@@ -416,6 +425,8 @@ class AgilePilotNode:
             self.env_level,
             self.env_folder,
             self.env_seed,
+            self.dynamic_phase_seed,
+            self.dynamic_phase_mode,
             state_snapshot.att[0],
             state_snapshot.att[1],
             state_snapshot.att[2],

@@ -13,6 +13,7 @@ class CandidateSpeedResult:
     emergency_stop: bool
     initial_path_speed: float
     evaluations: tuple
+    predicted_stop_distance: float = 0.0
 
     @property
     def safe_speeds(self):
@@ -231,21 +232,31 @@ class CandidateSpeedPlanner:
         self,
         horizon=3.0,
         prediction_dt=0.1,
-        prediction_accel=3.0,
+        max_accel=3.0,
+        max_brake_decel=1.5,
+        control_delay=0.25,
+        reverse_drift_distance=0.4,
+        cross_track_decay_time=0.8,
         safety_margin=1.0,
         candidate_step=0.1,
-        cross_track_convergence=1.0,
     ):
         self.horizon = float(horizon)
         self.prediction_dt = float(prediction_dt)
-        self.prediction_accel = float(prediction_accel)
+        self.max_accel = float(max_accel)
+        self.max_brake_decel = float(max_brake_decel)
+        self.control_delay = float(control_delay)
+        self.reverse_drift_distance = float(reverse_drift_distance)
+        self.cross_track_decay_time = float(cross_track_decay_time)
         self.safety_margin = float(safety_margin)
         self.candidate_step = float(candidate_step)
-        self.cross_track_convergence = float(cross_track_convergence)
         if self.horizon <= 0.0 or self.prediction_dt <= 0.0:
             raise ValueError("prediction horizon and dt must be positive")
-        if self.prediction_accel <= 0.0:
-            raise ValueError("prediction acceleration must be positive")
+        if self.max_accel <= 0.0 or self.max_brake_decel <= 0.0:
+            raise ValueError("candidate acceleration limits must be positive")
+        if self.control_delay < 0.0 or self.reverse_drift_distance < 0.0:
+            raise ValueError("candidate delay and reverse-drift buffer must be nonnegative")
+        if self.cross_track_decay_time <= 0.0:
+            raise ValueError("cross-track decay time must be positive")
         if not 0.0 < self.candidate_step <= 1.0:
             raise ValueError("candidate_step must be in (0, 1]")
 
@@ -262,6 +273,22 @@ class CandidateSpeedPlanner:
         fractions = np.unique(np.clip(np.append(fractions, 1.0), 0.0, 1.0))
         return fractions * desired_speed
 
+    @staticmethod
+    def _position_at_prediction_progress(polyline, progress):
+        if progress < 0.0:
+            return polyline.points[0] + progress * polyline.tangent_at(0.0)
+        if progress > polyline.length:
+            return polyline.points[-1] + (progress - polyline.length) * polyline.tangent_at(polyline.length)
+        return polyline.position_at(progress)
+
+    def _advance_speed(self, speed, target_speed, duration):
+        if duration <= 0.0:
+            return speed, 0.0
+        accel_limit = self.max_accel if target_speed >= speed else self.max_brake_decel
+        delta = float(np.clip(target_speed - speed, -accel_limit * duration, accel_limit * duration))
+        next_speed = speed + delta
+        return next_speed, 0.5 * (speed + next_speed) * duration
+
     def predict_drone_trajectory(self, path, position, velocity, target_speed):
         polyline = path if isinstance(path, PolylinePath) else PolylinePath(path)
         position = np.asarray(position, dtype=float)
@@ -277,21 +304,27 @@ class CandidateSpeedPlanner:
         for tau in self.time_offsets:
             step_dt = float(tau - previous_time)
             if step_dt > 0.0:
-                speed_delta = np.clip(
-                    target_speed - speed,
-                    -self.prediction_accel * step_dt,
-                    self.prediction_accel * step_dt,
-                )
-                next_speed = speed + speed_delta
-                progress += 0.5 * (speed + next_speed) * step_dt
-                speed = next_speed
-            if self.cross_track_convergence > 1e-6:
-                offset_ratio = max(0.0, 1.0 - float(tau) / self.cross_track_convergence)
-            else:
-                offset_ratio = 0.0
-            positions.append(polyline.position_at(progress) + path_offset * offset_ratio)
+                delay_dt = min(step_dt, max(0.0, self.control_delay - previous_time))
+                progress += speed * delay_dt
+                response_dt = step_dt - delay_dt
+                speed, response_progress = self._advance_speed(speed, target_speed, response_dt)
+                progress += response_progress
+            offset_ratio = float(0.2 ** (float(tau) / self.cross_track_decay_time))
+            predicted = self._position_at_prediction_progress(polyline, progress)
+            if target_speed <= 1e-6 and self.reverse_drift_distance > 0.0:
+                drift_ratio = min(1.0, float(tau) / max(self.control_delay, self.prediction_dt))
+                predicted = predicted - polyline.tangent_at(progress) * self.reverse_drift_distance * drift_ratio
+            positions.append(predicted + path_offset * offset_ratio)
             previous_time = float(tau)
         return np.asarray(positions), initial_speed
+
+    def predicted_stop_distance(self, initial_path_speed):
+        forward_speed = max(0.0, float(initial_path_speed))
+        return float(
+            forward_speed * self.control_delay
+            + forward_speed * forward_speed / (2.0 * self.max_brake_decel)
+            + self.reverse_drift_distance
+        )
 
     def _candidate_clearance(self, drone_positions, obstacle_predictions):
         min_clearance = float("inf")
@@ -340,4 +373,5 @@ class CandidateSpeedPlanner:
             emergency_stop=emergency_stop,
             initial_path_speed=float(initial_path_speed),
             evaluations=tuple(evaluations),
+            predicted_stop_distance=self.predicted_stop_distance(initial_path_speed),
         )

@@ -4,6 +4,7 @@
 // std lib
 #include <stdlib.h>
 
+#include <cstdint>
 #include <cmath>
 #include <iostream>
 
@@ -84,6 +85,7 @@ class VisionEnv final : public EnvBase {
   bool configStaticObjects(const std::string &csv_file);
 
   bool simDynamicObstacles(const Scalar dt);
+  std::vector<Scalar> resetDynamicObstaclePhases(const uint32_t seed);
 
   // flightmare (visualization)
   bool setUnity(const bool render);

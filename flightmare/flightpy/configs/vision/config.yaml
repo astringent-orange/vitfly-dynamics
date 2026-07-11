@@ -8,6 +8,7 @@ environment:
 datagen: 1
 rollout: 0
 dynamic_obstacles_motion: true
+dynamic_obstacle_phase_mode: seeded_reset
 
 rewards: # unused
   vel_coeff: -0.01

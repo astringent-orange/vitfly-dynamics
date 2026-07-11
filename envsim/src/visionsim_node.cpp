@@ -3,6 +3,9 @@
 #include "dodgeros_msgs/QuadState.h"
 #include "envsim/visionsim.hpp"
 #include "envsim_msgs/ObstacleArray.h"
+
+#include <cstdlib>
+#include <sstream>
 #include "nav_msgs/Odometry.h"
 #include "rosgraph_msgs/Clock.h"
 
@@ -82,6 +85,22 @@ void VisionSim::resetCallback(const std_msgs::EmptyConstPtr &msg) {
     simulator_.setCommand(Command(0.0, 0.0, Vector<3>::Zero()));
     simulator_.getState(&reset_state);
   }
+  const char* phase_seed_env = std::getenv("VITFLY_DYNAMIC_PHASE_SEED");
+  if (phase_seed_env == nullptr || std::string(phase_seed_env).empty()) {
+    phase_seed_env = std::getenv("VITFLY_ENV_SEED");
+  }
+  const uint32_t phase_seed = phase_seed_env == nullptr
+    ? 0u
+    : static_cast<uint32_t>(std::strtoul(phase_seed_env, nullptr, 10));
+  std::vector<Scalar> phases;
+  {
+    const std::lock_guard<std::mutex> lock(dynamic_objects_mutex_);
+    phases = vision_env_ptr_->resetDynamicObstaclePhases(phase_seed);
+  }
+  std::ostringstream phase_log;
+  phase_log << "Reset dynamic obstacle phases with seed=" << phase_seed << ":";
+  for (const Scalar phase : phases) phase_log << " " << phase;
+  ROS_INFO_STREAM(phase_log.str());
   // [KR_AGILE] Modified
   //Change the position of dynamic obstacles if the trigger is set
   if (vision_env_ptr_->_move_obst_trigger) vision_env_ptr_->move();
@@ -144,23 +163,20 @@ void VisionSim::simLoop() {
       }
     }
 
-    // simulate dynamic obstacles
-    std::vector<std::shared_ptr<flightlib::UnityObject>> dynamic_objects =
-      vision_env_ptr_->getDynamicObjects();
-    //[KR_AGILE] Modified
-    /**
-     * Plan is simple -> if datagen, we won't simulate dynamic obstacle trajectories
-     * We will make a piecewise function for the dynamic obstacle at each reset
-    */
-    if(vision_env_ptr_->_dynamic_obstacles_motion ||
-       !vision_env_ptr_->_move_obst_trigger)
     {
-      for (int i = 0; i < int(dynamic_objects.size()); i++) {
-        dynamic_objects[i]->run(sim_dt_);
+      const std::lock_guard<std::mutex> lock(dynamic_objects_mutex_);
+      // simulate dynamic obstacles
+      std::vector<std::shared_ptr<flightlib::UnityObject>> dynamic_objects =
+        vision_env_ptr_->getDynamicObjects();
+      if (vision_env_ptr_->_dynamic_obstacles_motion ||
+          !vision_env_ptr_->_move_obst_trigger) {
+        for (int i = 0; i < int(dynamic_objects.size()); i++) {
+          dynamic_objects[i]->run(sim_dt_);
+        }
       }
+      publishObstacles(quad_state);
+      publishDynamicObstacles(quad_state);
     }
-    publishObstacles(quad_state);
-    publishDynamicObstacles(quad_state);
 
     Scalar sleep_time = 1.0 / real_time_factor_ * sim_dt_ -
                         (ros::WallTime::now() - t_start_sim).toSec();

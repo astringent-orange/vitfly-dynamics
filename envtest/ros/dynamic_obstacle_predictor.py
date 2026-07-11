@@ -167,6 +167,14 @@ class DynamicObstacleTrajectoryPredictor:
     def configured_count(self):
         return len(self.trajectories)
 
+    @staticmethod
+    def phase_from_seed(seed, object_index, period):
+        value = (int(seed) * 1103515245 + int(object_index) * 12345 + 12345) & 0x7fffffff
+        return float(value / 2147483648.0 * max(0.0, float(period)))
+
+    def reset_calibration(self):
+        self.calibration = {}
+
     def _topic_world_positions(self, state, dynamic_obstacles_msg):
         if dynamic_obstacles_msg is None:
             return []

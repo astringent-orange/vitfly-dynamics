@@ -17,6 +17,7 @@ force_rviz=0
 env_count="${VITFLY_ENV_COUNT:-10}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
 des_vel="${VITFLY_DES_VEL:-4.0}"
+phase_seed_override="${VITFLY_DYNAMIC_PHASE_SEED:-}"
 
 for arg in "${@:3}"
 do
@@ -38,6 +39,9 @@ do
   elif [[ "$arg" == env_level=* ]]
   then
     env_level="${arg#env_level=}"
+  elif [[ "$arg" == phase_seed=* ]]
+  then
+    phase_seed_override="${arg#phase_seed=}"
   fi
 done
 
@@ -220,6 +224,7 @@ else
   export VITFLY_ENV_LEVEL="${VITFLY_ENV_LEVEL:-$env_level}"
   export VITFLY_ENV_FOLDER="${VITFLY_ENV_FOLDER:-environment_0}"
   export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
+  export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$VITFLY_ENV_SEED}"
   launch_simulator || exit 1
 fi
 
@@ -239,7 +244,8 @@ do
     export VITFLY_ENV_LEVEL="$env_level"
     export VITFLY_ENV_FOLDER="environment_$env_id"
     export VITFLY_ENV_SEED="$((10 + env_id))"
-    echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED"
+    export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((1000 + i - 1))}"
+    echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED phase_seed=$VITFLY_DYNAMIC_PHASE_SEED"
     force_stop_simulator
     launch_simulator || exit 1
   fi

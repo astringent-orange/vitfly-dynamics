@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <string>
 
 #include "flightlib/common/csv_reader.hpp"
@@ -25,6 +26,8 @@ class UnityObject {
   bool isStatic(void);
 
   bool loadTrajectory(const std::string csv_file);
+  bool resetTrajectory(const Scalar phase_seconds);
+  Scalar trajectoryPeriod(void) const;
 
   // publich set functions
   inline void setLoop(const bool loop) { loop_ = loop; };

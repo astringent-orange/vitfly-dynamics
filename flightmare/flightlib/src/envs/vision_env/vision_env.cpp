@@ -668,6 +668,21 @@ bool VisionEnv::configDynamicObjects(const std::string &yaml_file) {
   return true;
 }
 
+std::vector<Scalar> VisionEnv::resetDynamicObstaclePhases(const uint32_t seed) {
+  std::vector<Scalar> phases;
+  phases.reserve(dynamic_objects_.size());
+  for (size_t index = 0; index < dynamic_objects_.size(); ++index) {
+    const uint32_t value = seed * 1103515245u +
+                           static_cast<uint32_t>(index) * 12345u + 12345u;
+    const Scalar fraction = static_cast<Scalar>(value & 0x7fffffffu) /
+                            static_cast<Scalar>(2147483648.0);
+    const Scalar phase = fraction * dynamic_objects_[index]->trajectoryPeriod();
+    dynamic_objects_[index]->resetTrajectory(phase);
+    phases.push_back(phase);
+  }
+  return phases;
+}
+
 bool VisionEnv::configStaticObjects(const std::string &csv_file) {
   //
 

@@ -75,5 +75,31 @@ bool UnityObject::loadTrajectory(const std::string traj_csv) {
   return true;
 }
 
+Scalar UnityObject::trajectoryPeriod(void) const {
+  if (traj_.size() <= 1) return 0.0;
+  return std::max(Scalar(0.0), traj_.back().t);
+}
+
+bool UnityObject::resetTrajectory(const Scalar phase_seconds) {
+  const Scalar period = trajectoryPeriod();
+  if (period <= 0.0) return false;
+
+  Scalar phase = phase_seconds;
+  if (loop_) {
+    phase = std::fmod(phase, period);
+    if (phase < 0.0) phase += period;
+  } else {
+    phase = std::max(Scalar(0.0), std::min(phase, period));
+  }
+
+  const Scalar traj_dt = std::max(traj_[1].t - traj_[0].t, Scalar(1e-6));
+  int idx = int(phase / traj_dt);
+  idx = std::max(0, std::min(idx, int(traj_.size() - 1)));
+  state_.t = phase;
+  state_.x = traj_[idx].x;
+  sign_ = 1.0;
+  return true;
+}
+
 
 }  // namespace flightlib

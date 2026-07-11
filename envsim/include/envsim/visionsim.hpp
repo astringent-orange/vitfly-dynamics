@@ -80,6 +80,7 @@ class VisionSim {
   Vector<3> goal_pos_;
 
   std::mutex sim_mutex_;
+  std::mutex dynamic_objects_mutex_;
   std::thread sim_thread_;
   std::thread render_thread_;
 };

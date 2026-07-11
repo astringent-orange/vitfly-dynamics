@@ -7,8 +7,9 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import yaml
 
-from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, write_path_csv
+from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, read_path_csv, write_path_csv
 
 
 DIFFICULTY_CONFIG = {
@@ -90,21 +91,40 @@ def plan_astar_path(args, static_csv, output_dir):
     return planned_path
 
 
-def generate_one(args, env_id):
-    rng = np.random.default_rng(args.seed + env_id * 9973)
+def environment_paths(args, env_id):
     root = repo_root()
     source_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / args.source_level / f"environment_{env_id}"
     output_dir = root / "flightmare" / "flightpy" / "configs" / "vision" / f"dynamic_astar_{args.difficulty}" / f"environment_{env_id}"
-    csv_dir = output_dir / "csvtrajs"
+    return source_dir, output_dir
 
-    if not source_dir.exists():
-        raise FileNotFoundError(f"Source environment not found: {source_dir}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if csv_dir.exists():
-        shutil.rmtree(csv_dir)
+def preflight_paths(args):
+    planned_paths = {}
+    for env_id in args.env_ids:
+        source_dir, output_dir = environment_paths(args, env_id)
+        static_csv = source_dir / "static_obstacles.csv"
+        if not static_csv.is_file():
+            raise FileNotFoundError(f"Source static map not found for environment_{env_id}: {static_csv}")
+        if output_dir.exists() and not args.overwrite:
+            raise FileExistsError(
+                f"Refusing to overwrite existing {output_dir}; use --overwrite only when intentional"
+            )
+        print(f"[GEN_DYNAMIC_ASTAR] Preflighting environment_{env_id}")
+        planned_paths[env_id] = plan_astar_path(args, static_csv, output_dir)
+    return planned_paths
+
+
+def generate_one(args, env_id, planned_path):
+    rng = np.random.default_rng(args.seed + env_id * 9973)
+    source_dir, output_dir = environment_paths(args, env_id)
+    staging_dir = output_dir.parent / f".{output_dir.name}.staging"
+    csv_dir = staging_dir / "csvtrajs"
+
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=False)
     csv_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_dir / "static_obstacles.csv", output_dir / "static_obstacles.csv")
+    shutil.copy2(source_dir / "static_obstacles.csv", staging_dir / "static_obstacles.csv")
 
     cfg = DIFFICULTY_CONFIG[args.difficulty]
     x_positions = np.linspace(10.0, 55.0, args.num_dynamic)
@@ -129,10 +149,69 @@ def generate_one(args, env_id):
             }
         )
 
-    write_dynamic_yaml(output_dir / "dynamic_obstacles.yaml", objects)
-    planned_path = plan_astar_path(args, output_dir / "static_obstacles.csv", output_dir)
-    write_path_csv(output_dir / "astar_path.csv", planned_path)
+    write_dynamic_yaml(staging_dir / "dynamic_obstacles.yaml", objects)
+    write_path_csv(staging_dir / "astar_path.csv", planned_path)
+    verify_environment(args, env_id, staging_dir, planned_path)
+
+    if output_dir.exists():
+        if not args.overwrite:
+            raise FileExistsError(f"Refusing to replace existing {output_dir}")
+        backup_dir = output_dir.parent / f".{output_dir.name}.backup"
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        output_dir.rename(backup_dir)
+        try:
+            staging_dir.rename(output_dir)
+        except Exception:
+            backup_dir.rename(output_dir)
+            raise
+        shutil.rmtree(backup_dir)
+    else:
+        staging_dir.rename(output_dir)
     print(f"[GEN_DYNAMIC_ASTAR] Wrote {args.num_dynamic} dynamic obstacles to {output_dir}")
+
+
+def verify_environment(args, env_id, output_dir=None, planned_path=None):
+    _, default_output_dir = environment_paths(args, env_id)
+    output_dir = output_dir or default_output_dir
+    static_csv = output_dir / "static_obstacles.csv"
+    yaml_path = output_dir / "dynamic_obstacles.yaml"
+    path_csv = output_dir / "astar_path.csv"
+    required_files = [static_csv, yaml_path, path_csv]
+    missing = [str(path) for path in required_files if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"environment_{env_id} missing required files: {missing}")
+    with yaml_path.open() as stream:
+        config = yaml.safe_load(stream) or {}
+    if int(config.get("N", -1)) != args.num_dynamic:
+        raise RuntimeError(f"environment_{env_id} dynamic YAML count does not match {args.num_dynamic}")
+    trajectory_names = [config.get(f"Object{index}", {}).get("csvtraj") for index in range(1, args.num_dynamic + 1)]
+    if any(not name for name in trajectory_names):
+        raise RuntimeError(f"environment_{env_id} dynamic YAML has missing trajectory names")
+    for name in trajectory_names:
+        trajectory_path = output_dir / "csvtrajs" / f"{name}.csv"
+        if not trajectory_path.is_file():
+            raise FileNotFoundError(f"environment_{env_id} missing trajectory {trajectory_path}")
+        with trajectory_path.open(newline="") as stream:
+            rows = list(csv.reader(stream))
+        if len(rows) < 3 or rows[0] != ["t", "x", "y", "z", "qw", "qx", "qy", "qz"]:
+            raise RuntimeError(f"environment_{env_id} has invalid trajectory CSV {trajectory_path}")
+        try:
+            values = np.asarray([[float(value) for value in row[:4]] for row in rows[1:]], dtype=float)
+        except ValueError as exc:
+            raise RuntimeError(f"environment_{env_id} has non-numeric trajectory {trajectory_path}") from exc
+        if not np.isfinite(values).all() or np.any(np.diff(values[:, 0]) < 0.0):
+            raise RuntimeError(f"environment_{env_id} has invalid trajectory samples {trajectory_path}")
+
+    path = planned_path or read_path_csv(path_csv)
+    if len(path) < 2:
+        raise RuntimeError(f"environment_{env_id} A* path has fewer than two points")
+    planner = StaticAStarPlanner(
+        str(static_csv), resolution=args.astar_resolution, inflation_radius=args.static_inflation
+    )
+    if not all(planner.segment_margin(path[index], path[index + 1]) >= -1e-9 for index in range(len(path) - 1)):
+        raise RuntimeError(f"environment_{env_id} A* path enters an inflated obstacle")
+    return len(path)
 
 
 def rebuild_paths_only(args):
@@ -158,8 +237,15 @@ def generate(args):
     if args.path_only:
         rebuild_paths_only(args)
         return
+    planned_paths = preflight_paths(args)
     for env_id in args.env_ids:
-        generate_one(args, env_id)
+        generate_one(args, env_id, planned_paths[env_id])
+
+
+def verify(args):
+    for env_id in args.env_ids:
+        point_count = verify_environment(args, env_id)
+        print(f"[GEN_DYNAMIC_ASTAR] Verified environment_{env_id} points={point_count}")
 
 
 def main():
@@ -175,8 +261,15 @@ def main():
     parser.add_argument("--astar-start", type=float, nargs=3, default=[0.0, 0.0, 3.0])
     parser.add_argument("--astar-goal", type=float, nargs=3, default=[60.0, 0.0, 3.0])
     parser.add_argument("--path-only", action="store_true", help="Only rebuild astar_path.csv in existing dynamic environments.")
+    parser.add_argument("--verify-only", action="store_true", help="Validate existing dynamic environments without modifying them.")
+    parser.add_argument("--overwrite", action="store_true", help="Allow replacing existing environments after staging validation.")
     args = parser.parse_args()
-    generate(args)
+    if args.path_only and args.verify_only:
+        parser.error("--path-only and --verify-only cannot be combined")
+    if args.verify_only:
+        verify(args)
+    else:
+        generate(args)
 
 
 if __name__ == "__main__":

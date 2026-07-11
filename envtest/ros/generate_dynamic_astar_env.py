@@ -2,7 +2,9 @@
 import argparse
 import csv
 import math
+import multiprocessing
 import os
+import queue
 import shutil
 from pathlib import Path
 
@@ -98,8 +100,21 @@ def environment_paths(args, env_id):
     return source_dir, output_dir
 
 
+def _preflight_worker(args, env_id, result_queue):
+    try:
+        source_dir, output_dir = environment_paths(args, env_id)
+        static_csv = source_dir / "static_obstacles.csv"
+        if not static_csv.is_file():
+            raise FileNotFoundError(f"Source static map not found: {static_csv}")
+        planned_path = plan_astar_path(args, static_csv, output_dir)
+        result_queue.put((env_id, [np.asarray(point, dtype=float).tolist() for point in planned_path], None))
+    except Exception as exc:
+        result_queue.put((env_id, None, f"{type(exc).__name__}: {exc}"))
+
+
 def preflight_paths(args):
     planned_paths = {}
+    context = multiprocessing.get_context("spawn")
     for env_id in args.env_ids:
         source_dir, output_dir = environment_paths(args, env_id)
         static_csv = source_dir / "static_obstacles.csv"
@@ -110,7 +125,17 @@ def preflight_paths(args):
                 f"Refusing to overwrite existing {output_dir}; use --overwrite only when intentional"
             )
         print(f"[GEN_DYNAMIC_ASTAR] Preflighting environment_{env_id}")
-        planned_paths[env_id] = plan_astar_path(args, static_csv, output_dir)
+        result_queue = context.Queue()
+        process = context.Process(target=_preflight_worker, args=(args, env_id, result_queue))
+        process.start()
+        process.join()
+        try:
+            result_env_id, path_points, error = result_queue.get(timeout=5.0)
+        except queue.Empty as exc:
+            raise RuntimeError(f"A* preflight worker exited without a result for environment_{env_id}") from exc
+        if process.exitcode != 0 or result_env_id != env_id or error:
+            raise RuntimeError(f"A* preflight failed for environment_{env_id}: {error or process.exitcode}")
+        planned_paths[env_id] = [np.asarray(point, dtype=float) for point in path_points]
     return planned_paths
 
 

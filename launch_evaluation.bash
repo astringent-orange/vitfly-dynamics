@@ -16,7 +16,7 @@ fixed_env=0
 force_rviz=0
 env_count="${VITFLY_ENV_COUNT:-10}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
-des_vel="${VITFLY_DES_VEL:-5.0}"
+des_vel="${VITFLY_DES_VEL:-4.0}"
 
 for arg in "${@:3}"
 do

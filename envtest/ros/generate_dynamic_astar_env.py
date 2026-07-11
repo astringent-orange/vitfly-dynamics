@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, read_path_csv, write_path_csv
+from astar_planner import DEFAULT_SEGMENT_CLEARANCE, DEFAULT_STATIC_INFLATION, StaticAStarPlanner, read_path_csv, write_path_csv
 
 
 DIFFICULTY_CONFIG = {
@@ -77,10 +77,16 @@ def write_dynamic_yaml(path, objects):
 
 
 def plan_astar_path(args, static_csv, output_dir):
+    # Grid vertices can be free while a diagonal segment clips an inflated sphere.
+    grid_clearance = max(
+        DEFAULT_SEGMENT_CLEARANCE,
+        0.5 * math.sqrt(3.0) * args.astar_resolution + 1e-3,
+    )
     planner = StaticAStarPlanner(
         str(static_csv),
         resolution=args.astar_resolution,
         inflation_radius=args.static_inflation,
+        segment_clearance=grid_clearance,
     )
     planned_path = planner.plan(args.astar_start, args.astar_goal)
     if not planned_path:

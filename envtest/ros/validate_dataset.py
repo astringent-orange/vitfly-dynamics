@@ -9,6 +9,9 @@ import sys
 import cv2
 import numpy as np
 
+from astar_planner import read_path_csv
+from candidate_speed_planner import PolylinePath
+
 
 REQUIRED_COLUMNS = [
     "timestamp",
@@ -70,6 +73,69 @@ def _max_consecutive_true(values):
     return longest
 
 
+def _trajectory_path(rows, supplied_points=None):
+    if supplied_points is not None:
+        return PolylinePath(supplied_points), None
+    if not rows:
+        return None, "empty trajectory"
+    env_levels = {row.get("env_level", "") for row in rows if row.get("env_level", "")}
+    env_folders = {row.get("env_folder", "") for row in rows if row.get("env_folder", "")}
+    if len(env_levels) != 1 or len(env_folders) != 1:
+        return None, "missing or inconsistent env_level/env_folder"
+    env_level = next(iter(env_levels))
+    env_folder = next(iter(env_folders))
+    path_file = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "flightmare",
+            "flightpy",
+            "configs",
+            "vision",
+            env_level,
+            env_folder,
+            "astar_path.csv",
+        )
+    )
+    if not os.path.isfile(path_file):
+        return None, f"missing A* path cache {path_file}"
+    try:
+        points = read_path_csv(path_file)
+        return PolylinePath(points), None
+    except (OSError, ValueError, KeyError) as exc:
+        return None, f"invalid A* path cache {path_file}: {exc}"
+
+
+def _path_motion_metrics(rows, path):
+    positions = np.asarray(
+        [[float(row["pos_x"]), float(row["pos_y"]), float(row["pos_z"])] for row in rows],
+        dtype=float,
+    )
+    velocities = np.asarray(
+        [[float(row["vel_x"]), float(row["vel_y"]), float(row["vel_z"])] for row in rows],
+        dtype=float,
+    )
+    progress = np.empty(len(rows), dtype=float)
+    path_speed = np.empty(len(rows), dtype=float)
+    for index, (position, velocity) in enumerate(zip(positions, velocities)):
+        progress[index], _, tangent = path.project(position)
+        path_speed[index] = float(np.dot(velocity, tangent))
+
+    reversing = path_speed < -0.05
+    negative_ratio = float(np.sum(reversing)) / max(len(rows), 1)
+    max_backtrack = 0.0
+    backtrack_start = None
+    for index, is_reversing in enumerate(reversing):
+        if is_reversing and backtrack_start is None:
+            backtrack_start = progress[max(0, index - 1)]
+        if is_reversing:
+            max_backtrack = max(max_backtrack, float(backtrack_start - progress[index]))
+        else:
+            backtrack_start = None
+    return negative_ratio, max_backtrack, path_speed, progress
+
+
 def validate_trajectory(
     path,
     require_env_fields=False,
@@ -78,11 +144,12 @@ def validate_trajectory(
     max_low_speed_ratio=0.15,
     max_collision_rows=0,
     min_nearest_margin=0.0,
-    max_negative_actual_x_ratio=0.02,
-    max_backtrack_distance=0.3,
+    max_negative_path_speed_ratio=0.02,
+    max_path_backtrack_distance=0.3,
     max_path_cross_track_error=0.8,
     max_applied_speed_accel=3.5,
     max_yield_zero_positive_frames=2,
+    path_points=None,
 ):
     csv_path = os.path.join(path, "data.csv")
     if not os.path.exists(csv_path):
@@ -133,34 +200,28 @@ def validate_trajectory(
             low_speed_ratio = low_speed_rows / max(len(rows), 1)
             if low_speed_ratio > max_low_speed_ratio:
                 errors.append(f"{path}: low-speed ratio {low_speed_ratio:.3f} > {max_low_speed_ratio:.3f}")
-    if {"vel_x", "pos_x"}.issubset(fieldnames):
+    if {"vel_x", "vel_y", "vel_z", "pos_x", "pos_y", "pos_z"}.issubset(fieldnames):
         try:
-            actual_vel_x = np.asarray([float(row["vel_x"]) for row in rows], dtype=float)
-            positions_x = np.asarray([float(row["pos_x"]) for row in rows], dtype=float)
+            path_polyline, path_error = _trajectory_path(rows, supplied_points=path_points)
+            if path_polyline is None:
+                if require_env_fields or path_points is not None:
+                    errors.append(f"{path}: cannot validate path-projected motion: {path_error}")
+            else:
+                negative_path_ratio, max_backtrack, _, _ = _path_motion_metrics(rows, path_polyline)
         except ValueError:
-            errors.append(f"{path}: invalid actual x velocity or position")
+            errors.append(f"{path}: invalid path-projected velocity or position")
         else:
-            negative_actual = actual_vel_x < -0.05
-            negative_actual_ratio = float(np.sum(negative_actual)) / max(len(rows), 1)
-            if negative_actual_ratio > max_negative_actual_x_ratio:
-                errors.append(
-                    f"{path}: negative actual vel_x ratio {negative_actual_ratio:.3f} "
-                    f"> {max_negative_actual_x_ratio:.3f}"
-                )
-            max_backtrack = 0.0
-            backtrack_start = None
-            for idx, is_negative in enumerate(negative_actual):
-                if is_negative and backtrack_start is None:
-                    backtrack_start = positions_x[max(0, idx - 1)]
-                if is_negative:
-                    max_backtrack = max(max_backtrack, float(backtrack_start - positions_x[idx]))
-                else:
-                    backtrack_start = None
-            if max_backtrack > max_backtrack_distance:
-                errors.append(
-                    f"{path}: max continuous backtrack {max_backtrack:.3f}m "
-                    f"> {max_backtrack_distance:.3f}m"
-                )
+            if path_polyline is not None:
+                if negative_path_ratio > max_negative_path_speed_ratio:
+                    errors.append(
+                        f"{path}: negative path-speed ratio {negative_path_ratio:.3f} "
+                        f"> {max_negative_path_speed_ratio:.3f}"
+                    )
+                if max_backtrack > max_path_backtrack_distance:
+                    errors.append(
+                        f"{path}: max continuous path backtrack {max_backtrack:.3f}m "
+                        f"> {max_path_backtrack_distance:.3f}m"
+                    )
     candidate_fields = {
         "candidate_selected_speed",
         "candidate_safe_count",
@@ -173,6 +234,11 @@ def validate_trajectory(
         "path_cross_track_error",
         "path_turn_angle_deg",
         "path_speed_ceiling",
+        "candidate_control_delay",
+        "candidate_brake_decel",
+        "candidate_reverse_drift_buffer",
+        "candidate_initial_path_speed",
+        "candidate_predicted_stop_distance",
         "desired_vel",
     }
     if candidate_fields.issubset(fieldnames):
@@ -363,8 +429,20 @@ def main():
     parser.add_argument("--max-low-speed-ratio", type=float, default=0.15)
     parser.add_argument("--max-collision-rows", type=int, default=0)
     parser.add_argument("--min-nearest-margin", type=float, default=0.0)
-    parser.add_argument("--max-negative-actual-x-ratio", type=float, default=0.02)
-    parser.add_argument("--max-backtrack-distance", type=float, default=0.3)
+    parser.add_argument(
+        "--max-negative-path-speed-ratio",
+        "--max-negative-actual-x-ratio",
+        dest="max_negative_path_speed_ratio",
+        type=float,
+        default=0.02,
+    )
+    parser.add_argument(
+        "--max-path-backtrack-distance",
+        "--max-backtrack-distance",
+        dest="max_path_backtrack_distance",
+        type=float,
+        default=0.3,
+    )
     parser.add_argument("--max-path-cross-track-error", type=float, default=0.8)
     parser.add_argument("--max-applied-speed-accel", type=float, default=3.5)
     args = parser.parse_args()
@@ -387,8 +465,8 @@ def main():
             max_low_speed_ratio=args.max_low_speed_ratio,
             max_collision_rows=args.max_collision_rows,
             min_nearest_margin=args.min_nearest_margin,
-            max_negative_actual_x_ratio=args.max_negative_actual_x_ratio,
-            max_backtrack_distance=args.max_backtrack_distance,
+            max_negative_path_speed_ratio=args.max_negative_path_speed_ratio,
+            max_path_backtrack_distance=args.max_path_backtrack_distance,
             max_path_cross_track_error=args.max_path_cross_track_error,
             max_applied_speed_accel=args.max_applied_speed_accel,
         )

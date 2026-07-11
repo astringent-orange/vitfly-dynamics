@@ -20,7 +20,11 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
                 "timestamp": timestamp,
                 "desired_vel": 5.0,
                 "pos_x": 2.0,
+                "pos_y": 0.0,
+                "pos_z": 3.0,
                 "vel_x": 5.0,
+                "vel_y": 0.0,
+                "vel_z": 0.0,
                 "velcmd_x": 5.0,
                 "astar_success": 1,
                 "nearest_obstacle_margin": 1.0,
@@ -48,13 +52,18 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             csv_path = os.path.join(folder, "data.csv")
             with open(csv_path, "w", newline="") as output:
-                writer = csv.DictWriter(output, fieldnames=REQUIRED_COLUMNS)
+                fieldnames = list(dict.fromkeys(REQUIRED_COLUMNS + ["pos_y", "pos_z", "vel_y", "vel_z"]))
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
             for row in rows:
                 image = np.ones((2, 2), dtype=np.uint16)
                 cv2.imwrite(os.path.join(folder, f"{row['timestamp']}.png"), image)
-            return validate_trajectory(folder, **kwargs)[0]
+            return validate_trajectory(
+                folder,
+                path_points=[[0.0, 0.0, 3.0], [20.0, 0.0, 3.0]],
+                **kwargs,
+            )[0]
 
     def test_valid_candidate_row(self):
         self.assertEqual(self.validate_rows([self.make_row()]), [])
@@ -96,10 +105,30 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
             row["vel_x"] = -0.5
         errors = self.validate_rows(
             rows,
-            max_negative_actual_x_ratio=1.0,
-            max_backtrack_distance=0.3,
+            max_negative_path_speed_ratio=1.0,
+            max_path_backtrack_distance=0.3,
         )
-        self.assertTrue(any("max continuous backtrack" in error for error in errors))
+        self.assertTrue(any("max continuous path backtrack" in error for error in errors))
+
+    def test_uses_path_tangent_instead_of_world_x_axis(self):
+        rows = [self.make_row(f"{idx}.000") for idx in range(3)]
+        for idx, row in enumerate(rows):
+            row["pos_x"] = 10.0 - idx
+            row["vel_x"] = -1.0
+        with tempfile.TemporaryDirectory() as folder:
+            csv_path = os.path.join(folder, "data.csv")
+            fieldnames = list(dict.fromkeys(REQUIRED_COLUMNS + ["pos_y", "pos_z", "vel_y", "vel_z"]))
+            with open(csv_path, "w", newline="") as output:
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            for row in rows:
+                cv2.imwrite(os.path.join(folder, f"{row['timestamp']}.png"), np.ones((2, 2), dtype=np.uint16))
+            errors = validate_trajectory(
+                folder,
+                path_points=[[20.0, 0.0, 3.0], [0.0, 0.0, 3.0]],
+            )[0]
+        self.assertFalse(any("negative path-speed" in error for error in errors))
 
     def test_rejects_applied_speed_acceleration_spike(self):
         rows = [self.make_row("1.000"), self.make_row("1.100")]

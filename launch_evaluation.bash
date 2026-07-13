@@ -14,10 +14,11 @@ state_human=0
 random_env=0
 fixed_env=0
 force_rviz=0
-env_count="${VITFLY_ENV_COUNT:-10}"
+env_count="${VITFLY_ENV_COUNT:-101}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
 des_vel="${VITFLY_DES_VEL:-4.0}"
 phase_seed_override="${VITFLY_DYNAMIC_PHASE_SEED:-}"
+phase_seed_base="${VITFLY_DYNAMIC_PHASE_SEED_BASE:-1000}"
 
 for arg in "${@:3}"
 do
@@ -42,8 +43,23 @@ do
   elif [[ "$arg" == phase_seed=* ]]
   then
     phase_seed_override="${arg#phase_seed=}"
+  elif [[ "$arg" == phase_seed_base=* ]]
+  then
+    phase_seed_base="${arg#phase_seed_base=}"
   fi
 done
+
+if ! [[ "$env_count" =~ ^[1-9][0-9]*$ ]]
+then
+  echo "[LAUNCH SCRIPT] env_count must be a positive integer, got: $env_count"
+  exit 1
+fi
+
+if ! [[ "$phase_seed_base" =~ ^[0-9]+$ ]]
+then
+  echo "[LAUNCH SCRIPT] phase_seed_base must be a nonnegative integer, got: $phase_seed_base"
+  exit 1
+fi
 
 if [ "$2" = "vision" ]
 then
@@ -152,6 +168,18 @@ wait_for_process_exit() {
   return 0
 }
 
+ensure_environment_exists() {
+  environment_dir="$FLIGHTMARE_PATH/flightpy/configs/vision/$VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER"
+  if [ ! -f "$environment_dir/static_obstacles.csv" ] || \
+     [ ! -f "$environment_dir/dynamic_obstacles.yaml" ] || \
+     [ ! -f "$environment_dir/astar_path.csv" ]
+  then
+    echo "[LAUNCH SCRIPT] ERROR: Missing dynamic A* environment assets in $environment_dir"
+    return 1
+  fi
+  return 0
+}
+
 launch_simulator() {
   if pgrep -x visionsim_node >/dev/null && ros_master_ready
   then
@@ -225,6 +253,7 @@ else
   export VITFLY_ENV_FOLDER="${VITFLY_ENV_FOLDER:-environment_0}"
   export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
   export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$VITFLY_ENV_SEED}"
+  ensure_environment_exists || exit 1
   launch_simulator || exit 1
 fi
 
@@ -244,8 +273,9 @@ do
     export VITFLY_ENV_LEVEL="$env_level"
     export VITFLY_ENV_FOLDER="environment_$env_id"
     export VITFLY_ENV_SEED="$((10 + env_id))"
-    export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((1000 + i - 1))}"
+    export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((phase_seed_base + i - 1))}"
     echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED phase_seed=$VITFLY_DYNAMIC_PHASE_SEED"
+    ensure_environment_exists || exit 1
     force_stop_simulator
     launch_simulator || exit 1
   fi

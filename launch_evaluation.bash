@@ -225,6 +225,34 @@ force_stop_simulator() {
   sleep 10
 }
 
+prepare_pilot_for_rollout() {
+  local attempt
+  for attempt in 1 2
+  do
+    echo "[LAUNCH SCRIPT] Preparing low-level pilot (attempt $attempt/2)"
+    rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
+    sleep 1
+    rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
+    sleep 1
+    rostopic pub /kingfisher/dodgeros_pilot/enable std_msgs/Bool "data: true" --once
+    sleep 1
+    rostopic pub /kingfisher/dodgeros_pilot/start std_msgs/Empty "{}" --once
+
+    if python3 ./envtest/ros/wait_for_pilot_hover.py --timeout 30
+    then
+      return 0
+    fi
+
+    echo "[LAUNCH SCRIPT] Pilot did not reach hover on attempt $attempt."
+    if [ "$attempt" -eq 1 ]
+    then
+      force_stop_simulator
+      launch_simulator || return 1
+    fi
+  done
+  return 1
+}
+
 stop_controller() {
   if [ -z "$COMP_PID" ]
   then
@@ -302,6 +330,12 @@ do
 
   fi
 
+  if ! prepare_pilot_for_rollout
+  then
+    echo "[LAUNCH SCRIPT] ERROR: Pilot never reached hover for rollout $i; no trajectory was created."
+    exit 1
+  fi
+
   export ROLLOUT_NAME="rollout_""$i"
   echo "$ROLLOUT_NAME"
 
@@ -318,14 +352,7 @@ do
 
   wait_for_topic /kingfisher/start_navigation 30 || exit 1
 
-  # Publish simulator reset after the evaluator and controller subscribers exist.
-  rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
-  rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
-  rostopic pub /kingfisher/dodgeros_pilot/enable std_msgs/Bool "data: true" --once
-  rostopic pub /kingfisher/dodgeros_pilot/start std_msgs/Empty "{}" --once
-
   start_time=$(date +%s)
-  sleep 2
 
   # Wait until the evaluation script has finished
   while ps -p $PY_PID > /dev/null

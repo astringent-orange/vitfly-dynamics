@@ -135,9 +135,8 @@ class AgilePilotNode:
 
         self.data_collection_xrange = [2, 60]
 
-        # make the folder for the epoch
-        self.folder = f"train_set/{int(time.time()*100)}" 
-        os.mkdir(self.folder)
+        # Create a trajectory directory only after the first valid sample.
+        self.folder = None
         self.env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
         self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
@@ -290,7 +289,7 @@ class AgilePilotNode:
         self.got_keypress = 0.0
         self.rgb_img = None
         self.save_rgb_debug = False
-        self.debug_rgb_folder = opj(self.folder, "debug_rgb")
+        self.debug_rgb_folder = None
 
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
@@ -325,9 +324,25 @@ class AgilePilotNode:
             info.update(planner_info)
         return [info[field] for field in PLANNER_FIELDS]
 
+    def ensure_data_folder(self):
+        if self.folder is not None:
+            return
+        base_folder = "train_set"
+        os.makedirs(base_folder, exist_ok=True)
+        while True:
+            candidate = opj(base_folder, str(int(time.time() * 100)))
+            try:
+                os.mkdir(candidate)
+                self.folder = candidate
+                self.debug_rgb_folder = opj(candidate, "debug_rgb")
+                print(f"[RUN_COMPETITION] Recording trajectory in {candidate}")
+                return
+            except FileExistsError:
+                time.sleep(0.01)
+
     def sanitize_data_log(self):
         with self.data_log_lock:
-            if not hasattr(self, "data_log"):
+            if not hasattr(self, "data_log") or self.folder is None:
                 return
             cleaned = self.data_log.drop_duplicates(subset=["timestamp"], keep="first")
             if "pos_x" in cleaned.columns:
@@ -347,7 +362,7 @@ class AgilePilotNode:
     def flush_data_log(self):
         with self.data_log_lock:
             try:
-                if hasattr(self, "folder") and hasattr(self, "data_log"):
+                if self.folder is not None and hasattr(self, "data_log"):
                     self.sanitize_data_log()
                     self.data_log.to_csv(self.folder + "/data.csv", index=False)
             except Exception as exc:
@@ -405,6 +420,7 @@ class AgilePilotNode:
         if timestamp in self.saved_timestamps:
             return False
 
+        self.ensure_data_folder()
         image_path = f"{self.folder}/{str(timestamp)}.png"
         depth_image = self.last_valid_img.copy()
         if not cv2.imwrite(image_path, (depth_image * 255).astype(np.uint8)):

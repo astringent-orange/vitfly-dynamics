@@ -82,21 +82,25 @@ def plan_astar_path(args, static_csv, output_dir):
         DEFAULT_SEGMENT_CLEARANCE,
         0.5 * math.sqrt(3.0) * args.astar_resolution + 1e-3,
     )
-    planner = StaticAStarPlanner(
-        str(static_csv),
-        resolution=args.astar_resolution,
-        inflation_radius=args.static_inflation,
-        segment_clearance=grid_clearance,
-    )
-    planned_path = planner.plan(args.astar_start, args.astar_goal)
-    if not planned_path:
-        raise RuntimeError(f"A* failed for {output_dir}")
-    if not all(
-        planner.segment_margin(planned_path[idx], planned_path[idx + 1]) >= -1e-9
-        for idx in range(len(planned_path) - 1)
-    ):
-        raise RuntimeError(f"A* path enters an inflated obstacle for {output_dir}")
-    return planned_path
+    clearances = [DEFAULT_SEGMENT_CLEARANCE, grid_clearance]
+    for clearance in clearances:
+        planner = StaticAStarPlanner(
+            str(static_csv),
+            resolution=args.astar_resolution,
+            inflation_radius=args.static_inflation,
+            segment_clearance=clearance,
+        )
+        planned_path = planner.plan(args.astar_start, args.astar_goal)
+        if not planned_path:
+            continue
+        if all(
+            planner.segment_margin(planned_path[idx], planned_path[idx + 1]) >= -1e-9
+            for idx in range(len(planned_path) - 1)
+        ):
+            if clearance == grid_clearance:
+                print(f"[GEN_DYNAMIC_ASTAR] Using conservative grid clearance for {output_dir}")
+            return planned_path
+    raise RuntimeError(f"A* failed continuous-clearance validation for {output_dir}")
 
 
 def environment_paths(args, env_id):

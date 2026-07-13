@@ -1,0 +1,137 @@
+N: 8
+Object1:
+  csvtraj: traj_dyn_000
+  loop: true
+  position:
+  - 8.967083
+  - -8.310225
+  - 4.834929
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.675573
+  - 0.675573
+  - 0.675573
+Object2:
+  csvtraj: traj_dyn_001
+  loop: true
+  position:
+  - 16.810747
+  - 8.403681
+  - 4.867529
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.644837
+  - 0.644837
+  - 0.644837
+Object3:
+  csvtraj: traj_dyn_002
+  loop: true
+  position:
+  - 22.435358
+  - -7.569530
+  - 2.604873
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.980407
+  - 0.980407
+  - 0.980407
+Object4:
+  csvtraj: traj_dyn_003
+  loop: true
+  position:
+  - 27.861125
+  - 8.007590
+  - 4.183392
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.788616
+  - 0.788616
+  - 0.788616
+Object5:
+  csvtraj: traj_dyn_004
+  loop: true
+  position:
+  - 36.520251
+  - -8.312345
+  - 2.718546
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.640445
+  - 0.640445
+  - 0.640445
+Object6:
+  csvtraj: traj_dyn_005
+  loop: true
+  position:
+  - 40.825910
+  - 8.385522
+  - 2.482434
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 1.187357
+  - 1.187357
+  - 1.187357
+Object7:
+  csvtraj: traj_dyn_006
+  loop: true
+  position:
+  - 49.587603
+  - -7.956137
+  - 2.535988
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 0.757002
+  - 0.757002
+  - 0.757002
+Object8:
+  csvtraj: traj_dyn_007
+  loop: true
+  position:
+  - 55.987971
+  - 7.699958
+  - 5.418311
+  prefab: rpg_box01
+  rotation:
+  - 1.000000
+  - 0.000000
+  - 0.000000
+  - 0.000000
+  scale:
+  - 1.194024
+  - 1.194024
+  - 1.194024

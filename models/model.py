@@ -149,6 +149,36 @@ class LSTMNetVIT(nn.Module):
         out = self.nn_fc2(out)
         return out, h
 
+class TwoFrameViTLSTM(LSTMNetVIT):
+    """ViT+LSTM policy for temporally stacked two-frame depth input.
+
+    This class intentionally keeps the original :class:`LSTMNetVIT` encoder,
+    decoder, LSTM, metadata interface, and output head unchanged.  Only the
+    first patch-merging layer receives two depth channels: historical depth in
+    channel 0 and current depth in channel 1.
+    """
+    def __init__(self):
+        super().__init__()
+        self.encoder_blocks[0] = MixTransformerEncoderLayer(
+            2, 32, patch_size=7, stride=4, padding=3,
+            n_layers=2, reduction_ratio=8, num_heads=1,
+            expansion_factor=8,
+        )
+
+    def forward(self, X):
+        if not isinstance(X, (list, tuple)) or len(X) < 3:
+            raise ValueError(
+                "TwoFrameViTLSTM expects [images, desired_velocity, quaternion] "
+                "with an optional LSTM hidden state."
+            )
+        images = X[0]
+        if images.ndim != 4 or images.shape[1] != 2:
+            raise ValueError(
+                "TwoFrameViTLSTM expects depth images with shape "
+                "[time_or_batch, 2, height, width]."
+            )
+        return super().forward(X)
+
 class ViT(nn.Module):
     """
     ViT+FC Network 
@@ -282,4 +312,8 @@ if __name__ == '__main__':
 
     model = LSTMNetVIT().float()
     print("VITLSTM: ")
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+    model = TwoFrameViTLSTM().float()
+    print("TWO FRAME VITLSTM: ")
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))

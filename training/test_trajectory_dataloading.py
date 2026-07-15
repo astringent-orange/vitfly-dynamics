@@ -7,14 +7,13 @@ import cv2
 import numpy as np
 
 try:
-    from .dataloading import manifest_dataloader
+    from .dataloading import trajectory_dataloader
 except ImportError:
-    from dataloading import manifest_dataloader
+    from dataloading import trajectory_dataloader
 
 
 FIELDS = [
-    'timestamp', 'desired_vel',
-    'quat_1', 'quat_2', 'quat_3', 'quat_4',
+    'timestamp', 'desired_vel', 'quat_1', 'quat_2', 'quat_3', 'quat_4',
     'velcmd_x', 'velcmd_y', 'velcmd_z', 'is_collide',
 ]
 
@@ -35,23 +34,15 @@ def _write_trajectory(root, name, pixel_offset=0, collision_index=None):
             })
             image = np.full((12, 18), pixel_offset + index, dtype=np.uint8)
             cv2.imwrite(os.path.join(folder, f'{timestamp:.3f}.png'), image)
-    return name
 
 
-class ManifestDataloaderTest(unittest.TestCase):
-    def test_two_frame_order_manifest_filter_and_trajectory_split(self):
+class TrajectoryDataloaderTest(unittest.TestCase):
+    def test_two_frame_order_and_trajectory_split(self):
         with tempfile.TemporaryDirectory() as dataset_dir:
-            accepted = [_write_trajectory(dataset_dir, f'traj_{index}', pixel_offset=index * 10)
-                        for index in range(4)]
-            rejected = _write_trajectory(dataset_dir, 'rejected', pixel_offset=100)
-            with open(os.path.join(dataset_dir, 'accepted_manifest.csv'), 'w', newline='') as stream:
-                writer = csv.DictWriter(stream, fieldnames=['status', 'trajectory_dir'])
-                writer.writeheader()
-                for name in accepted:
-                    writer.writerow({'status': 'accepted', 'trajectory_dir': name})
-                writer.writerow({'status': 'rejected', 'trajectory_dir': rejected})
+            for index in range(4):
+                _write_trajectory(dataset_dir, f'traj_{index}', pixel_offset=index * 10)
 
-            train, val, (train_dirs, val_dirs), stats = manifest_dataloader(
+            train, val, (train_dirs, val_dirs), stats = trajectory_dataloader(
                 dataset_dir, num_frames=2, frame_delta_s=0.10, val_split=0.25, seed=7
             )
             train_images, _, _, train_labels, train_lengths = train
@@ -61,23 +52,15 @@ class ManifestDataloaderTest(unittest.TestCase):
             self.assertTrue(np.all(train_lengths == 2))
             self.assertTrue(np.all(val_lengths == 2))
             self.assertFalse(set(train_dirs) & set(val_dirs))
-            self.assertEqual(stats['accepted_trajectories'], 4)
+            self.assertEqual(stats['dataset_trajectories'], 4)
             self.assertTrue(np.allclose(train_labels[:, 0] * 4.0 % 1.0, 0.0))
-
-            first_pair = train_images[0]
-            self.assertLess(first_pair[0].mean(), first_pair[1].mean())
+            self.assertLess(train_images[0, 0].mean(), train_images[0, 1].mean())
 
     def test_collision_current_frame_is_not_used(self):
         with tempfile.TemporaryDirectory() as dataset_dir:
-            names = [_write_trajectory(dataset_dir, f'traj_{index}', collision_index=3)
-                     for index in range(4)]
-            with open(os.path.join(dataset_dir, 'accepted_manifest.csv'), 'w', newline='') as stream:
-                writer = csv.DictWriter(stream, fieldnames=['status', 'trajectory_dir'])
-                writer.writeheader()
-                for name in names:
-                    writer.writerow({'status': 'accepted', 'trajectory_dir': name})
-
-            train, val, _, _ = manifest_dataloader(
+            for index in range(4):
+                _write_trajectory(dataset_dir, f'traj_{index}', collision_index=3)
+            train, val, _, _ = trajectory_dataloader(
                 dataset_dir, num_frames=2, frame_delta_s=0.10, val_split=0.25, seed=7
             )
             self.assertEqual(train[0].shape[0] + val[0].shape[0], 4)

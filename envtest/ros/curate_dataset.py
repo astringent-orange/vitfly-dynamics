@@ -1,12 +1,15 @@
 #!/usr/bin/python3
-"""Create a training manifest from raw dynamic A* trajectory folders."""
+"""Validate the latest dynamic A* batch and retain only accepted trajectories."""
 
 import argparse
 import csv
 import glob
+import json
 import os
 import re
+import shutil
 import sys
+from datetime import datetime, timezone
 
 import numpy as np
 import yaml
@@ -32,25 +35,7 @@ WARNING_VALIDATION_OPTIONS = {
     "max_path_cross_track_error": 0.8,
 }
 
-MANIFEST_FIELDS = [
-    "status",
-    "rollout",
-    "trajectory_dir",
-    "env_level",
-    "env_folder",
-    "env_seed",
-    "dynamic_phase_seed",
-    "row_count",
-    "png_count",
-    "evaluator_success",
-    "evaluator_crashes",
-    "min_obstacle_margin",
-    "negative_path_speed_ratio",
-    "max_path_backtrack_m",
-    "max_cross_track_error_m",
-    "hard_reasons",
-    "quality_warnings",
-]
+SUMMARY_FILENAME = "collection_summary.json"
 
 
 def _rollout_key(name):
@@ -150,11 +135,44 @@ def curate_dataset(dataset_dir, evaluation_path, latest=None):
     return records
 
 
-def write_manifest(records, output_path):
-    with open(output_path, "w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=MANIFEST_FIELDS)
-        writer.writeheader()
-        writer.writerows(records)
+def _load_summary(path):
+    if not os.path.isfile(path):
+        return {
+            "schema_version": 1,
+            "collection_runs": 0,
+            "trajectories_total": 0,
+            "accepted_trajectories": 0,
+            "rejected_trajectories": 0,
+            "retained_trajectories": 0,
+        }
+    with open(path) as stream:
+        return json.load(stream)
+
+
+def apply_curation(dataset_dir, records):
+    summary_path = os.path.join(dataset_dir, SUMMARY_FILENAME)
+    summary = _load_summary(summary_path)
+    accepted = sum(record["status"] == "accepted" for record in records)
+    rejected_records = [record for record in records if record["status"] == "rejected"]
+    for record in rejected_records:
+        folder = os.path.join(dataset_dir, record["trajectory_dir"])
+        if not os.path.isdir(folder):
+            raise FileNotFoundError(f"rejected trajectory is missing: {folder}")
+    for record in rejected_records:
+        shutil.rmtree(os.path.join(dataset_dir, record["trajectory_dir"]))
+    summary.update({
+        "schema_version": 1,
+        "collection_runs": int(summary.get("collection_runs", 0)) + 1,
+        "trajectories_total": int(summary.get("trajectories_total", 0)) + len(records),
+        "accepted_trajectories": int(summary.get("accepted_trajectories", 0)) + accepted,
+        "rejected_trajectories": int(summary.get("rejected_trajectories", 0)) + len(rejected_records),
+        "retained_trajectories": int(summary.get("retained_trajectories", 0)) + accepted,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    })
+    with open(summary_path, "w") as stream:
+        json.dump(summary, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+    return summary
 
 
 def main():
@@ -162,8 +180,7 @@ def main():
     parser.add_argument("dataset_dir", help="Raw train_set directory containing trajectory folders.")
     parser.add_argument("--evaluation", default="evaluation.yaml", help="Evaluation YAML for the current batch.")
     parser.add_argument("--latest", type=int, help="Number of latest trajectories to associate with evaluation rollouts.")
-    parser.add_argument("--output", help="Manifest CSV path; defaults to <dataset_dir>/accepted_manifest.csv.")
-    parser.add_argument("--dry-run", action="store_true", help="Print the result without writing a manifest.")
+    parser.add_argument("--apply", action="store_true", help="Delete rejected trajectories and update collection_summary.json.")
     args = parser.parse_args()
 
     try:
@@ -175,10 +192,12 @@ def main():
     for record in records:
         detail = record["hard_reasons"] or record["quality_warnings"] or "clean"
         print(f"[CURATE_DATASET] {record['rollout']} {record['status']}: {detail}")
-    if not args.dry_run:
-        output = args.output or os.path.join(args.dataset_dir, "accepted_manifest.csv")
-        write_manifest(records, output)
-        print(f"[CURATE_DATASET] Wrote {output}")
+    if args.apply:
+        summary = apply_curation(args.dataset_dir, records)
+        print(f"[CURATE_DATASET] Updated {os.path.join(args.dataset_dir, SUMMARY_FILENAME)}")
+        print(f"[CURATE_DATASET] cumulative={summary}")
+    else:
+        print("[CURATE_DATASET] Dry run only; pass --apply to delete rejected trajectories.")
     print(f"[CURATE_DATASET] accepted={accepted} rejected={rejected} total={len(records)}")
     return 0 if accepted else 1
 

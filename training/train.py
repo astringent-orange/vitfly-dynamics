@@ -35,12 +35,6 @@ uname = getpass.getuser()
 # 1. just for dataloading, in which case dataset_name is provided and usually no_model=True, or
 # 2. for model training, in which case just args is provided
 class TRAINER:
-    MODEL_SPECS = {
-        'CurrentFrameViTLSTM': (0, 1),
-        'PreviousFrameViTLSTM': (1, 2),
-        'SecondPreviousFrameViTLSTM': (2, 2),
-    }
-
     def __init__(self, args=None):
         self.args = args
         if self.args is not None:
@@ -52,8 +46,10 @@ class TRAINER:
             self.dataset_name = args.dataset
             self.short = args.short
 
-            self.model_type = args.model_type
-            self.frame_offset = args.frame_offset
+            self.frame_offset = args.offset
+            self.model_type, self.num_input_frames, self.checkpoint_prefix = model_library.frame_mode_spec(
+                self.frame_offset
+            )
             self.val_split = args.val_split
             self.seed = args.seed # if args.seed>0 else None
             self.load_checkpoint = args.load_checkpoint
@@ -70,14 +66,6 @@ class TRAINER:
 
 
         assert self.dataset_name is not None, 'Dataset name not provided, neither through args nor through dataset_name kwarg'
-        if self.model_type not in self.MODEL_SPECS:
-            raise ValueError(f'Unsupported model_type={self.model_type}; expected one of {sorted(self.MODEL_SPECS)}')
-        expected_offset, self.num_input_frames = self.MODEL_SPECS[self.model_type]
-        if self.frame_offset != expected_offset:
-            raise ValueError(
-                f'{self.model_type} requires frame_offset={expected_offset}, got {self.frame_offset}'
-            )
-
         if self.seed is not None:
             random.seed(self.seed)
             np.random.seed(self.seed)
@@ -106,7 +94,7 @@ class TRAINER:
                     file.write('{} = {}\n'.format(arg, attr))
                 f = opj(self.workspace, 'config.txt')
             with open(f, 'w') as file:
-                file.write(open(self.args.config, 'r').read())
+                file.write(open(self.args.config_path, 'r').read())
         f = opj(self.workspace, 'log.txt')
         self.logfile = open(f, 'w')
 
@@ -233,12 +221,7 @@ class TRAINER:
     def save_model(self, ep):
         self.mylogger(f'[SAVE] Saving model at epoch {ep}')
         path = self.workspace
-        prefix = {
-            'CurrentFrameViTLSTM': 'current_frame_vitlstm',
-            'PreviousFrameViTLSTM': 'previous_frame_vitlstm',
-            'SecondPreviousFrameViTLSTM': 'second_previous_frame_vitlstm',
-        }[self.model_type]
-        torch.save(self.model.state_dict(), opj(path, f'{prefix}_{str(ep).zfill(6)}.pth'))
+        torch.save(self.model.state_dict(), opj(path, f'{self.checkpoint_prefix}_{str(ep).zfill(6)}.pth'))
         self.mylogger(f'[SAVE] Model saved at {path}')
 
     def weighted_mse_loss(self, input, target, weight):
@@ -349,19 +332,19 @@ class TRAINER:
 def argparsing():
 
     import configargparse
-    parser = configargparse.ArgumentParser()
+    default_config = opj(os.path.dirname(os.path.abspath(__file__)), 'config', 'train_vitlstm.txt')
+    parser = configargparse.ArgumentParser(default_config_files=[default_config])
 
     # general params
-    parser.add_argument('--config', is_config_file=True, help='config file relative path')
+    parser.add_argument('--config', is_config_file=True, help='optional config file overriding the common defaults')
     parser.add_argument('--basedir', type=str, default='.', help='repository root (run from src/vitfly)')
     parser.add_argument('--logdir', type=str, default='training/logs', help='path to relative logging directory')
     parser.add_argument('--datadir', type=str, default='training/datasets', help='path to relative dataset directory')
     
     # experiment-level and learner params
     parser.add_argument('--ws_suffix', type=str, default='', help='suffix if any to workspace name')
-    parser.add_argument('--model_type', type=str, choices=tuple(TRAINER.MODEL_SPECS), default='CurrentFrameViTLSTM', help='named ViT+LSTM input variant')
     parser.add_argument('--dataset', type=str, default='dataset', help='name of accepted-only dataset')
-    parser.add_argument('--frame_offset', type=int, choices=(0, 1, 2), default=0, help='history frame index: 0=current, 1=previous, 2=second previous')
+    parser.add_argument('--offset', type=int, choices=(0, 1, 2), default=0, help='frame mode: 0=current, 1=previous, 2=second previous')
     parser.add_argument('--short', type=int, default=0, help='if nonzero, how many trajectory folders to load')
     parser.add_argument('--val_split', type=float, default=0.2, help='fraction of dataset to use for validation')
     parser.add_argument('--seed', type=int, default=None, help='random seed to use for python random, numpy, and torch -- WARNING, probably not fully implemented')
@@ -376,7 +359,8 @@ def argparsing():
     parser.add_argument('--val_freq', type=int, default=10, help='frequency with which to evaluate on validation set')
 
     args = parser.parse_args()
-    print(f'[CONFIGARGPARSE] Parsing args from config file {args.config}')
+    args.config_path = args.config or default_config
+    print(f'[CONFIGARGPARSE] Parsing args from config file {args.config_path}')
 
     return args
 

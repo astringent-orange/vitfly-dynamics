@@ -4,13 +4,6 @@ import cv2
 import numpy as np
 
 
-MODEL_FRAME_OFFSETS = {
-    'CurrentFrameViTLSTM': 0,
-    'PreviousFrameViTLSTM': 1,
-    'SecondPreviousFrameViTLSTM': 2,
-}
-
-
 def build_frame_stack(history, current, frame_offset):
     """Build ``[history, current]`` channels from a prior-frame sequence.
 

@@ -17,9 +17,8 @@ force_rviz=0
 env_count="${VITFLY_ENV_COUNT:-101}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
 des_vel="${VITFLY_DES_VEL:-4.0}"
-model_type="${VITFLY_MODEL_TYPE:-CurrentFrameViTLSTM}"
-frame_offset="${VITFLY_FRAME_OFFSET:-0}"
-model_path="${VITFLY_MODEL_PATH:-../../models/current_frame_vitlstm_000099.pth}"
+offset="${VITFLY_OFFSET:-0}"
+model_path="${VITFLY_MODEL_PATH:-}"
 phase_seed_override="${VITFLY_DYNAMIC_PHASE_SEED:-}"
 phase_seed_base="${VITFLY_DYNAMIC_PHASE_SEED_BASE:-1000}"
 
@@ -49,27 +48,22 @@ do
   elif [[ "$arg" == phase_seed_base=* ]]
   then
     phase_seed_base="${arg#phase_seed_base=}"
-  elif [[ "$arg" == model_type=* ]]
+  elif [[ "$arg" == offset=* ]]
   then
-    model_type="${arg#model_type=}"
-  elif [[ "$arg" == frame_offset=* ]]
-  then
-    frame_offset="${arg#frame_offset=}"
+    offset="${arg#offset=}"
   elif [[ "$arg" == model_path=* ]]
   then
     model_path="${arg#model_path=}"
+  elif [[ "$arg" == model_type=* || "$arg" == frame_offset=* ]]
+  then
+    echo "[LAUNCH SCRIPT] model_type/frame_offset are obsolete; use offset=0,1,2"
+    exit 1
   fi
 done
 
-case "$model_type" in
-  CurrentFrameViTLSTM) expected_frame_offset=0 ;;
-  PreviousFrameViTLSTM) expected_frame_offset=1 ;;
-  SecondPreviousFrameViTLSTM) expected_frame_offset=2 ;;
-  *) echo "[LAUNCH SCRIPT] unsupported model_type: $model_type"; exit 1 ;;
-esac
-if [ "$frame_offset" != "$expected_frame_offset" ]
+if ! [[ "$offset" =~ ^[012]$ ]]
 then
-  echo "[LAUNCH SCRIPT] $model_type requires frame_offset=$expected_frame_offset, got $frame_offset"
+  echo "[LAUNCH SCRIPT] offset must be 0, 1, or 2, got: $offset"
   exit 1
 fi
 
@@ -368,7 +362,7 @@ do
   PY_PID="$!"
 
   python3 run_competition.py $run_competition_args --des_vel "$des_vel" \
-    --model_type "$model_type" --frame_offset "$frame_offset" --model_path "$model_path" &
+    --offset "$offset" --model_path "$model_path" &
   COMP_PID="$!"
   cd -
 

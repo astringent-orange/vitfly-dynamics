@@ -4,8 +4,6 @@ logdir = training/logs
 datadir = training/datasets
 
 dataset = dataset
-model_type = SecondPreviousFrameViTLSTM
-frame_offset = 2
 short = 0
 val_split = 0.2
 seed = 0

@@ -183,6 +183,25 @@ class SecondPreviousFrameViTLSTM(LSTMNetVIT):
     def __init__(self):
         super().__init__(input_channels=2)
 
+
+# Public mode selection is intentionally keyed by frame offset.  The model
+# name and checkpoint prefix remain internal metadata, so training and
+# inference cannot drift apart by maintaining separate mappings.
+FRAME_MODE_SPECS = {
+    0: ('CurrentFrameViTLSTM', 1, 'current_frame_vitlstm'),
+    1: ('PreviousFrameViTLSTM', 2, 'previous_frame_vitlstm'),
+    2: ('SecondPreviousFrameViTLSTM', 2, 'second_previous_frame_vitlstm'),
+}
+
+
+def frame_mode_spec(offset):
+    try:
+        return FRAME_MODE_SPECS[int(offset)]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f'unsupported offset={offset}; expected one of {sorted(FRAME_MODE_SPECS)}'
+        ) from exc
+
 class ViT(nn.Module):
     """
     ViT+FC Network 

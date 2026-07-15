@@ -70,20 +70,17 @@ training/datasets/dataset/
 
 ### 4. 开始训练
 
-从仓库根目录执行。三个实验使用同一数据集和训练超参数，只有输入模式与模型名称不同：
+从仓库根目录执行。公共超参数由 `training/config/train_vitlstm.txt` 自动加载，使用 `--offset` 快速切换输入模式：
 
 ```bash
 # 当前帧：输入 [D_t]
-CUDA_VISIBLE_DEVICES=0 python training/train.py \
-  --config training/config/train_current_frame_vitlstm.txt
+CUDA_VISIBLE_DEVICES=0 python training/train.py --offset 0
 
 # 当前帧 + 上一帧：输入 [D_{t-1}, D_t]
-CUDA_VISIBLE_DEVICES=0 python training/train.py \
-  --config training/config/train_previous_frame_vitlstm.txt
+CUDA_VISIBLE_DEVICES=0 python training/train.py --offset 1
 
 # 当前帧 + 再上一帧：输入 [D_{t-2}, D_t]
-CUDA_VISIBLE_DEVICES=0 python training/train.py \
-  --config training/config/train_second_previous_frame_vitlstm.txt
+CUDA_VISIBLE_DEVICES=0 python training/train.py --offset 2
 ```
 
 训练日志、checkpoint、训练/验证轨迹划分和运行元数据写入 `training/logs/`。服务器长任务建议在 `tmux` 或作业调度器中运行。
@@ -103,12 +100,11 @@ training/logs/
     └── previous_frame_vitlstm_000099.pth
 ```
 
-仿真推理必须使用与 checkpoint 对应的模型名称和帧偏移：
+仿真推理使用 offset 选择与 checkpoint 对应的模型：
 
 ```bash
 bash launch_evaluation.bash 1 vision \
-  model_type=PreviousFrameViTLSTM \
-  frame_offset=1 \
+  offset=1 \
   model_path=/absolute/path/to/previous_frame_vitlstm_000099.pth
 ```
 

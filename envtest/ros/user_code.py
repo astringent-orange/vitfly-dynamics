@@ -19,7 +19,7 @@ if torch is not None:
 from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
 from candidate_speed_planner import CandidateSpeedPlanner, CandidateYieldPolicy, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
-from frame_stack import build_frame_stack, MODEL_FRAME_OFFSETS
+from frame_stack import build_frame_stack
 
 
 DEFAULT_EXPERT_DYNAMICS = {
@@ -120,12 +120,11 @@ def compute_command_vision_based(state, orig_img, frame_history, desiredVel, tra
 
     device = next(trained_model.parameters()).device
 
-    if trained_model.__class__.__name__ not in MODEL_FRAME_OFFSETS:
-        raise ValueError(f'Unsupported inference model {trained_model.__class__.__name__}')
-    if MODEL_FRAME_OFFSETS[trained_model.__class__.__name__] != frame_offset:
+    mode_model_type, _, _ = frame_mode_spec(frame_offset)
+    if trained_model.__class__.__name__ != mode_model_type:
         raise ValueError(
-            f'Model {trained_model.__class__.__name__} requires frame_offset '
-            f'{MODEL_FRAME_OFFSETS[trained_model.__class__.__name__]}, got {frame_offset}'
+            f'offset={frame_offset} requires {mode_model_type}, '
+            f'got {trained_model.__class__.__name__}'
         )
     if state.pos[0] < 0.5:
         hidden_state = None

@@ -28,7 +28,6 @@ from os.path import join as opj
 from copy import deepcopy
 import cv2
 from cv_bridge import CvBridge
-from frame_stack import MODEL_FRAME_OFFSETS
 try:
     import torch
 except ImportError:
@@ -78,7 +77,7 @@ PLANNER_FIELDS = [
 
 
 class AgilePilotNode:
-    def __init__(self, vision_based=False, model_type=None, model_path=None, desVel=None, keyboard=False, frame_offset=0):
+    def __init__(self, vision_based=False, offset=0, model_path=None, desVel=None, keyboard=False):
         print("[RUN_COMPETITION] Initializing agile_pilot_node...")
         rospy.init_node("agile_pilot_node", anonymous=False)
 
@@ -155,18 +154,23 @@ class AgilePilotNode:
         print(f"[RUN_COMPETITION] Environment = {self.env_level}/{self.env_folder} seed={self.env_seed} phase_seed={self.dynamic_phase_seed}")
         print()
 
+        self.frame_offset = int(offset)
+        self.model_type, self.num_input_frames, self.checkpoint_prefix = frame_mode_spec(self.frame_offset)
+        if self.vision_based and not model_path:
+            raise ValueError('[RUN_COMPETITION] vision-based inference requires --model_path')
+
         self.state_expert = None
         if not self.vision_based and not self.keyboard:
             self.state_expert = AStarDynamicExpert()
             print("[RUN_COMPETITION] A* dynamic state expert initialized")
 
         # load trained model here (copied over from user_code.py)
-        if self.vision_based and model_path is not None:
+        if self.vision_based:
             if torch is None:
                 raise RuntimeError("Torch is required for vision-based model inference.")
             print(f"[RUN_COMPETITION] Model loading from {model_path} ...")
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model = globals()[model_type]().to(self.device).float()
+            self.model = globals()[self.model_type]().to(self.device).float()
 
             # Give full path if possible since the bash script runs from outside the folder
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
@@ -175,8 +179,8 @@ class AgilePilotNode:
                 raise ValueError(f'[RUN_COMPETITION] Missing run_metadata.json next to {model_path}')
             with open(metadata_path) as stream:
                 metadata = json.load(stream)
-            if metadata.get('model_type') != model_type or int(metadata.get('frame_offset', -1)) != frame_offset:
-                raise ValueError('[RUN_COMPETITION] checkpoint metadata does not match model_type/frame_offset')
+            if metadata.get('model_type') != self.model_type or int(metadata.get('frame_offset', -1)) != self.frame_offset:
+                raise ValueError('[RUN_COMPETITION] checkpoint metadata does not match offset')
             self.model.eval()
 
             # Initialize hidden state
@@ -289,15 +293,6 @@ class AgilePilotNode:
         self.rgb_img = None
         self.save_rgb_debug = False
         self.debug_rgb_folder = None
-        if model_type not in MODEL_FRAME_OFFSETS:
-            raise ValueError(f'Unsupported model_type={model_type}; expected one of {sorted(MODEL_FRAME_OFFSETS)}')
-        expected_offset = MODEL_FRAME_OFFSETS[model_type]
-        if frame_offset != expected_offset:
-            raise ValueError(f'{model_type} requires frame_offset={expected_offset}, got {frame_offset}')
-        self.frame_offset = frame_offset
-        if self.vision_based and model_path is None:
-            raise ValueError('[RUN_COMPETITION] vision-based inference requires --model_path')
-
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 
@@ -697,13 +692,12 @@ class AgilePilotNode:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agile Pilot.")
     parser.add_argument("--vision_based", help="Fly vision-based", required=False, dest="vision_based", action="store_true")
-    parser.add_argument('--model_type', type=str, choices=tuple(MODEL_FRAME_OFFSETS), default='CurrentFrameViTLSTM')
-    parser.add_argument('--frame_offset', type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument('--offset', type=int, choices=(0, 1, 2), default=0, help='frame mode: 0=current, 1=previous, 2=second previous')
     parser.add_argument('--model_path', type=str, default=None, help='absolute path to model checkpoint')
     parser.add_argument('--des_vel', type=float, default=None, help='desired velocity for quadrotor')
     parser.add_argument("--keyboard", help="Fly state-based mode but take velocity commands from keyboard WASD", required=False, dest="keyboard", action="store_true")
 
     args = parser.parse_args()
-    agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, model_type=args.model_type, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard, frame_offset=args.frame_offset)
+    agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, offset=args.offset, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard)
     rospy.spin()
     agile_pilot_node.flush_data_log()

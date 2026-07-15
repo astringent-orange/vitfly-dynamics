@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from frame_stack import MODEL_FRAME_OFFSETS, build_frame_stack
+from frame_stack import build_frame_stack
 
 
 class FrameStackTest(unittest.TestCase):
@@ -11,9 +11,6 @@ class FrameStackTest(unittest.TestCase):
         previous = np.full((6, 9), 2.0, dtype=np.float32)
         second_previous = np.full((6, 9), 1.0, dtype=np.float32)
 
-        self.assertEqual(MODEL_FRAME_OFFSETS['CurrentFrameViTLSTM'], 0)
-        self.assertEqual(MODEL_FRAME_OFFSETS['PreviousFrameViTLSTM'], 1)
-        self.assertEqual(MODEL_FRAME_OFFSETS['SecondPreviousFrameViTLSTM'], 2)
         self.assertEqual(build_frame_stack([], current, 0).shape, (1, 60, 90))
         self.assertIsNone(build_frame_stack([], current, 1))
         self.assertIsNone(build_frame_stack([previous], current, 2))

@@ -11,6 +11,7 @@ quadrotor obstacle avoidance" by Bhattacharya, et. al
 import json
 import os, sys
 import random
+import re
 from os.path import join as opj
 import numpy as np
 import torch
@@ -34,6 +35,12 @@ uname = getpass.getuser()
 # 1. just for dataloading, in which case dataset_name is provided and usually no_model=True, or
 # 2. for model training, in which case just args is provided
 class TRAINER:
+    MODEL_SPECS = {
+        'CurrentFrameViTLSTM': (0, 1),
+        'PreviousFrameViTLSTM': (1, 2),
+        'SecondPreviousFrameViTLSTM': (2, 2),
+    }
+
     def __init__(self, args=None):
         self.args = args
         if self.args is not None:
@@ -46,7 +53,7 @@ class TRAINER:
             self.short = args.short
 
             self.model_type = args.model_type
-            self.frame_delta_s = args.frame_delta_s
+            self.frame_offset = args.frame_offset
             self.val_split = args.val_split
             self.seed = args.seed # if args.seed>0 else None
             self.load_checkpoint = args.load_checkpoint
@@ -63,6 +70,13 @@ class TRAINER:
 
 
         assert self.dataset_name is not None, 'Dataset name not provided, neither through args nor through dataset_name kwarg'
+        if self.model_type not in self.MODEL_SPECS:
+            raise ValueError(f'Unsupported model_type={self.model_type}; expected one of {sorted(self.MODEL_SPECS)}')
+        expected_offset, self.num_input_frames = self.MODEL_SPECS[self.model_type]
+        if self.frame_offset != expected_offset:
+            raise ValueError(
+                f'{self.model_type} requires frame_offset={expected_offset}, got {self.frame_offset}'
+            )
 
         if self.seed is not None:
             random.seed(self.seed)
@@ -73,7 +87,7 @@ class TRAINER:
         ## Workspace ##
         ###############
 
-        expname = datetime.now().strftime('d%m_%d_t%H_%M')
+        expname = self.model_type + '_' + datetime.now().strftime('d%m_%d_t%H_%M')
         self.workspace = opj(self.basedir, self.logdir, expname)
         wkspc_ctr = 2
         while os.path.exists(self.workspace):
@@ -126,21 +140,7 @@ class TRAINER:
         ##################################
 
         self.mylogger('[SETUP] Establishing model and optimizer.')
-        if self.model_type == 'LSTMNet':
-            self.model = model_library.LSTMNet().to(self.device).float()
-        elif self.model_type == 'ConvNet':
-            self.model = model_library.ConvNet().to(self.device).float()
-        elif self.model_type == 'ViT':            
-            self.model = model_library.ViT().to(self.device).float()
-        elif self.model_type == 'ViTLSTM':
-            self.model = model_library.LSTMNetVIT().to(self.device).float()
-        elif self.model_type == 'TwoFrameViTLSTM':
-            self.model = model_library.TwoFrameViTLSTM().to(self.device).float()
-        elif self.model_type == 'UNet':
-            self.model = model_library.UNetConvLSTMNet().to(self.device).float()
-        else:
-            self.mylogger(f'[SETUP] Invalid model_type {self.model_type}. Exiting.')
-            exit()
+        self.model = getattr(model_library, self.model_type)().to(self.device).float()
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
@@ -156,19 +156,18 @@ class TRAINER:
 
     def load_from_checkpoint(self, checkpoint_path):
         metadata_path = opj(os.path.dirname(checkpoint_path), 'run_metadata.json')
-        if self.model_type == 'TwoFrameViTLSTM':
-            if not os.path.isfile(metadata_path):
-                raise ValueError(
-                    '[SETUP] TwoFrameViTLSTM checkpoints require run_metadata.json for compatibility validation'
-                )
-            with open(metadata_path) as stream:
-                metadata = json.load(stream)
-            if metadata.get('model_type') != 'TwoFrameViTLSTM':
-                raise ValueError('[SETUP] refusing to load a non-two-frame checkpoint into TwoFrameViTLSTM')
-            if float(metadata.get('frame_delta_s', -1.0)) != self.frame_delta_s:
-                raise ValueError('[SETUP] checkpoint frame_delta_s does not match the current configuration')
+        if not os.path.isfile(metadata_path):
+            raise ValueError('[SETUP] named ViTLSTM checkpoints require run_metadata.json')
+        with open(metadata_path) as stream:
+            metadata = json.load(stream)
+        if metadata.get('model_type') != self.model_type:
+            raise ValueError(
+                f'[SETUP] checkpoint model_type={metadata.get("model_type")} does not match {self.model_type}'
+            )
+        if int(metadata.get('frame_offset', -1)) != self.frame_offset:
+            raise ValueError('[SETUP] checkpoint frame_offset does not match the current configuration')
         try:
-            self.num_eps_trained = int(checkpoint_path[-10:-4])
+            self.num_eps_trained = int(re.search(r'_(\d{6})\.pth$', checkpoint_path).group(1))
         except:
             self.num_eps_trained = 0
             self.mylogger(f'[SETUP] Could not parse number of epochs trained from checkpoint path {checkpoint_path}, using 0')
@@ -177,19 +176,16 @@ class TRAINER:
 
     def dataloader(self, val_split, short=0, seed=None, train_val_dirs=None):
         self.mylogger(f'[DATALOADER] Loading from {self.dataset_dir}')
-        num_frames = 2 if self.model_type == 'TwoFrameViTLSTM' else 1
-        if self.model_type not in ('ViTLSTM', 'TwoFrameViTLSTM'):
-            raise ValueError('[DATALOADER] training supports only ViTLSTM or TwoFrameViTLSTM')
         train_data, val_data, (self.train_dirs, self.val_dirs), stats = trajectory_dataloader(
-            opj(self.basedir, self.dataset_dir), num_frames=num_frames,
-            frame_delta_s=self.frame_delta_s, val_split=val_split, short=short,
+            opj(self.basedir, self.dataset_dir), frame_offset=self.frame_offset,
+            val_split=val_split, short=short,
             seed=seed, train_val_dirs=train_val_dirs,
         )
         self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd, self.train_trajlength = train_data
         self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd, self.val_trajlength = val_data
         self.dataset_stats = stats
         self.mylogger(
-            f'[DATALOADER] accepted-only directories | frames={num_frames}, delta={self.frame_delta_s:.3f}s, '
+            f'[DATALOADER] accepted-only directories | model={self.model_type}, frame_offset={self.frame_offset}, '
             f'trajectories={stats["dataset_trajectories"]}, train={stats["train_loaded_trajectories"]}, '
             f'samples={stats["train_samples"]}, val={stats["val_loaded_trajectories"]}, '
             f'val samples={stats["val_samples"]}'
@@ -206,17 +202,17 @@ class TRAINER:
             (self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd), self.device
         )
         self.mylogger(f'[DATALOADER] Preloading into device {self.device} done')
-        assert self.train_ims.shape[1] == num_frames, 'Unexpected image channel count'
+        assert self.train_ims.shape[1] == self.num_input_frames, 'Unexpected image channel count'
         assert self.train_ims.max() <= 1.0 and self.train_ims.min() >= 0.0, 'Images not normalized'
         np.save(opj(self.workspace, 'train_val_dirs.npy'), np.array((self.train_dirs, self.val_dirs), dtype=object))
-        self._write_run_metadata(num_frames)
+        self._write_run_metadata()
 
-    def _write_run_metadata(self, num_frames):
+    def _write_run_metadata(self):
         metadata = {
             'model_type': self.model_type,
             'dataset': self.dataset_name,
-            'frame_delta_s': self.frame_delta_s,
-            'num_frames': num_frames,
+            'frame_offset': self.frame_offset,
+            'num_input_frames': self.num_input_frames,
             'train_trajectories': len(self.train_dirs),
             'val_trajectories': len(self.val_dirs),
             'dataset_stats': self.dataset_stats,
@@ -237,7 +233,12 @@ class TRAINER:
     def save_model(self, ep):
         self.mylogger(f'[SAVE] Saving model at epoch {ep}')
         path = self.workspace
-        torch.save(self.model.state_dict(), opj(path, f'model_{str(ep).zfill(6)}.pth'))
+        prefix = {
+            'CurrentFrameViTLSTM': 'current_frame_vitlstm',
+            'PreviousFrameViTLSTM': 'previous_frame_vitlstm',
+            'SecondPreviousFrameViTLSTM': 'second_previous_frame_vitlstm',
+        }[self.model_type]
+        torch.save(self.model.state_dict(), opj(path, f'{prefix}_{str(ep).zfill(6)}.pth'))
         self.mylogger(f'[SAVE] Model saved at {path}')
 
     def weighted_mse_loss(self, input, target, weight):
@@ -352,21 +353,21 @@ def argparsing():
 
     # general params
     parser.add_argument('--config', is_config_file=True, help='config file relative path')
-    parser.add_argument('--basedir', type=str, default=f'/home/{uname}/agile_ws/src/agile_flight', help='path to repo')
-    parser.add_argument('--logdir', type=str, default='learner/logs', help='path to relative logging directory')
-    parser.add_argument('--datadir', type=str, default=f'/home/{uname}/agile_ws/src/agile_flight', help='path to relative dataset directory')
+    parser.add_argument('--basedir', type=str, default='.', help='repository root (run from src/vitfly)')
+    parser.add_argument('--logdir', type=str, default='training/logs', help='path to relative logging directory')
+    parser.add_argument('--datadir', type=str, default='training/datasets', help='path to relative dataset directory')
     
     # experiment-level and learner params
     parser.add_argument('--ws_suffix', type=str, default='', help='suffix if any to workspace name')
-    parser.add_argument('--model_type', type=str, default='LSTMNet', help='string matching model name in lstmArch.py')
-    parser.add_argument('--dataset', type=str, default='5-2', help='name of dataset')
-    parser.add_argument('--frame_delta_s', type=float, default=0.10, help='target history interval for two-frame samples')
+    parser.add_argument('--model_type', type=str, choices=tuple(TRAINER.MODEL_SPECS), default='CurrentFrameViTLSTM', help='named ViT+LSTM input variant')
+    parser.add_argument('--dataset', type=str, default='dataset', help='name of accepted-only dataset')
+    parser.add_argument('--frame_offset', type=int, choices=(0, 1, 2), default=0, help='history frame index: 0=current, 1=previous, 2=second previous')
     parser.add_argument('--short', type=int, default=0, help='if nonzero, how many trajectory folders to load')
     parser.add_argument('--val_split', type=float, default=0.2, help='fraction of dataset to use for validation')
     parser.add_argument('--seed', type=int, default=None, help='random seed to use for python random, numpy, and torch -- WARNING, probably not fully implemented')
     parser.add_argument('--device', type=str, default='cuda', help='generic cuda device; specific GPU should be specified in CUDA_VISIBLE_DEVICES')
     parser.add_argument('--load_checkpoint', action='store_true', default=False, help='whether to load from a model checkpoint')
-    parser.add_argument('--checkpoint_path', type=str, default=f'/home/{uname}/agile_ws/src/agile_flight/learner/logs/d05_10_t03_13/model_000499.pth', help='absolute path to model checkpoint')
+    parser.add_argument('--checkpoint_path', type=str, default='', help='checkpoint path (required with --load_checkpoint)')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--N_eps', type=int, default=100, help='number of epochs to train for')
     parser.add_argument('--lr_warmup_epochs', type=int, default=5, help='number of epochs to warmup learning rate for')

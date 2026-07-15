@@ -17,8 +17,10 @@ from user_code import AStarDynamicExpert, compute_command_vision_based, compute_
 from utils import AgileCommandMode, AgileQuadState
 
 import atexit
+import json
 import time
 import threading
+from collections import deque
 import numpy as np
 import pandas as pd
 import os, sys
@@ -26,6 +28,7 @@ from os.path import join as opj
 from copy import deepcopy
 import cv2
 from cv_bridge import CvBridge
+from frame_stack import MODEL_FRAME_OFFSETS
 try:
     import torch
 except ImportError:
@@ -75,7 +78,7 @@ PLANNER_FIELDS = [
 
 
 class AgilePilotNode:
-    def __init__(self, vision_based=False, model_type=None, model_path=None, desVel=None, keyboard=False):
+    def __init__(self, vision_based=False, model_type=None, model_path=None, desVel=None, keyboard=False, frame_offset=0):
         print("[RUN_COMPETITION] Initializing agile_pilot_node...")
         rospy.init_node("agile_pilot_node", anonymous=False)
 
@@ -96,6 +99,7 @@ class AgilePilotNode:
         self.t1 = 0 #Time flag
         self.timestamp = 0 #Time stamp initial
         self.last_valid_img = None #Image that will be logged
+        self.frame_history = deque(maxlen=2)
         self.saved_timestamps = set()
         self.last_saved_state_t = None
         self.data_log_lock = threading.RLock()
@@ -162,22 +166,17 @@ class AgilePilotNode:
                 raise RuntimeError("Torch is required for vision-based model inference.")
             print(f"[RUN_COMPETITION] Model loading from {model_path} ...")
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            if model_type == 'LSTMNet':
-                self.model = LSTMNet().to(self.device).float()
-            elif model_type == 'UNetLSTM':
-                self.model = UNetConvLSTMNet().to(self.device).float()
-            elif model_type == 'ConvNet':
-                self.model = ConvNet().to(self.device).float()                
-            elif model_type == 'ViT':
-                self.model = ViT().to(self.device).float()
-            elif model_type == 'ViTLSTM':
-                self.model = LSTMNetVIT().to(self.device).float()                
-            else:
-                print(f'[RUN_COMPETITION] Invalid model_type {model_type}. Exiting.')
-                exit()
+            self.model = globals()[model_type]().to(self.device).float()
 
             # Give full path if possible since the bash script runs from outside the folder
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            metadata_path = opj(os.path.dirname(os.path.abspath(model_path)), 'run_metadata.json')
+            if not os.path.isfile(metadata_path):
+                raise ValueError(f'[RUN_COMPETITION] Missing run_metadata.json next to {model_path}')
+            with open(metadata_path) as stream:
+                metadata = json.load(stream)
+            if metadata.get('model_type') != model_type or int(metadata.get('frame_offset', -1)) != frame_offset:
+                raise ValueError('[RUN_COMPETITION] checkpoint metadata does not match model_type/frame_offset')
             self.model.eval()
 
             # Initialize hidden state
@@ -290,6 +289,12 @@ class AgilePilotNode:
         self.rgb_img = None
         self.save_rgb_debug = False
         self.debug_rgb_folder = None
+        if model_type not in MODEL_FRAME_OFFSETS:
+            raise ValueError(f'Unsupported model_type={model_type}; expected one of {sorted(MODEL_FRAME_OFFSETS)}')
+        expected_offset = MODEL_FRAME_OFFSETS[model_type]
+        if frame_offset != expected_offset:
+            raise ValueError(f'{model_type} requires frame_offset={expected_offset}, got {frame_offset}')
+        self.frame_offset = frame_offset
 
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
@@ -473,14 +478,13 @@ class AgilePilotNode:
         if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
         self.ctr += 1
-        self.prevImg = deepcopy(self.last_valid_img)
         img = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding="passthrough")
         img = np.clip(img/self.depth_im_threshold, 0, 1)
-                
-        if self.prevImg is None:
-            self.prevImg = img
-
-        self.last_valid_img = deepcopy(img) if img.min() > 0.0 else self.last_valid_img
+        if img.min() <= 0.0:
+            return
+        if self.last_valid_img is not None:
+            self.frame_history.append(deepcopy(self.last_valid_img))
+        self.last_valid_img = deepcopy(img)
         
         
         
@@ -500,7 +504,12 @@ class AgilePilotNode:
         # print('[RUN_COMPETITION] calling compute_command_vision_based')
         start_compute_time = time.time()
 
-        command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(state_snapshot, img, self.prevImg,self.desiredVel, self.model, self.model_hidden_state)
+        command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(
+            state_snapshot, img, self.frame_history, self.desiredVel, self.model,
+            self.model_hidden_state, self.frame_offset,
+        )
+        if command is None:
+            return
 
         # publish debug images
         self.debug_img1_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img1, encoding="passthrough"))
@@ -675,6 +684,10 @@ class AgilePilotNode:
     def start_callback(self, data):
         if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
+        self.frame_history.clear()
+        self.last_valid_img = None
+        if hasattr(self, 'model_hidden_state'):
+            self.model_hidden_state = None
         print("[RUN_COMPETITION] Start publishing commands!")
         self.publish_commands = True
 
@@ -682,12 +695,13 @@ class AgilePilotNode:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agile Pilot.")
     parser.add_argument("--vision_based", help="Fly vision-based", required=False, dest="vision_based", action="store_true")
-    parser.add_argument('--model_type', type=str, default='LSTMNet', help='string matching model name in lstmArch.py')
+    parser.add_argument('--model_type', type=str, choices=tuple(MODEL_FRAME_OFFSETS), default='CurrentFrameViTLSTM')
+    parser.add_argument('--frame_offset', type=int, choices=(0, 1, 2), default=0)
     parser.add_argument('--model_path', type=str, default=None, help='absolute path to model checkpoint')
     parser.add_argument('--des_vel', type=float, default=None, help='desired velocity for quadrotor')
     parser.add_argument("--keyboard", help="Fly state-based mode but take velocity commands from keyboard WASD", required=False, dest="keyboard", action="store_true")
 
     args = parser.parse_args()
-    agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, model_type=args.model_type, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard)
+    agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, model_type=args.model_type, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard, frame_offset=args.frame_offset)
     rospy.spin()
     agile_pilot_node.flush_data_log()

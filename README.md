@@ -70,16 +70,20 @@ training/datasets/dataset/
 
 ### 4. 开始训练
 
-从仓库根目录执行。单帧与双帧训练使用同一数据集，只有模型及输入帧数不同：
+从仓库根目录执行。三个实验使用同一数据集和训练超参数，只有输入模式与模型名称不同：
 
 ```bash
-# 单帧 ViT-LSTM 基线
+# 当前帧：输入 [D_t]
 CUDA_VISIBLE_DEVICES=0 python training/train.py \
-  --config training/config/train_vitlstm_1f.txt
+  --config training/config/train_current_frame_vitlstm.txt
 
-# 双帧 ViT-LSTM（[D_{t-0.10s}, D_t]）
+# 当前帧 + 上一帧：输入 [D_{t-1}, D_t]
 CUDA_VISIBLE_DEVICES=0 python training/train.py \
-  --config training/config/train_two_frame_vit_lstm.txt
+  --config training/config/train_previous_frame_vitlstm.txt
+
+# 当前帧 + 再上一帧：输入 [D_{t-2}, D_t]
+CUDA_VISIBLE_DEVICES=0 python training/train.py \
+  --config training/config/train_second_previous_frame_vitlstm.txt
 ```
 
 训练日志、checkpoint、训练/验证轨迹划分和运行元数据写入 `training/logs/`。服务器长任务建议在 `tmux` 或作业调度器中运行。
@@ -88,15 +92,24 @@ CUDA_VISIBLE_DEVICES=0 python training/train.py \
 
 ```text
 training/logs/
-└── d07_15_t17_30/
+└── PreviousFrameViTLSTM_d07_15_t17_30/
     ├── args.txt                 # 解析后的全部启动参数
     ├── config.txt               # 本次使用的配置文件快照
     ├── log.txt                  # 数据加载、训练和验证输出
-    ├── run_metadata.json        # 模型、帧数、数据集和数据划分统计
+    ├── run_metadata.json        # 模型名称、帧偏移、数据集和数据划分统计
     ├── train_val_dirs.npy       # 固定的训练/验证轨迹目录划分
     ├── events.out.tfevents.*    # TensorBoard 标量事件
-    ├── model_000025.pth         # 按 save_model_freq 保存的 checkpoint
-    └── model_000099.pth         # 训练结束时的 checkpoint（epoch 取决于配置）
+    ├── previous_frame_vitlstm_000025.pth
+    └── previous_frame_vitlstm_000099.pth
+```
+
+仿真推理必须使用与 checkpoint 对应的模型名称和帧偏移：
+
+```bash
+bash launch_evaluation.bash 1 vision \
+  model_type=PreviousFrameViTLSTM \
+  frame_offset=1 \
+  model_path=/absolute/path/to/previous_frame_vitlstm_000099.pth
 ```
 
 查看训练曲线：
@@ -115,9 +128,10 @@ tensorboard --logdir training/logs
 
 ## 训练实现说明
 
-- `ViTLSTM` 接受单帧深度输入。
-- `TwoFrameViTLSTM` 仅把 ViT 的首层输入通道从 1 改为 2；双帧顺序固定为 `[D_{t-0.10s}, D_t]`。
-- 序列开始处若没有满足时间间隔的历史帧，加载器跳过该样本，不复制当前帧。
+- `CurrentFrameViTLSTM` 接受 `[D_t]`。
+- `PreviousFrameViTLSTM` 接受 `[D_{t-1}, D_t]`。
+- `SecondPreviousFrameViTLSTM` 接受 `[D_{t-2}, D_t]`。
+- 训练和推理均按帧索引构造输入；历史帧不足时跳过或等待，不复制当前帧。
 - 训练/验证按轨迹划分，避免同一轨迹泄漏到两个集合。
 
 ## 仿真与数据采集

@@ -1,4 +1,4 @@
-"""Trajectory-folder data loading for the STEP2 single- and two-frame models."""
+"""Accepted-only trajectory loading for the three ViT+LSTM frame modes."""
 
 import csv
 import glob
@@ -83,11 +83,9 @@ def _split_trajectory_folders(folders, val_split, short, seed, train_val_dirs):
     return train_dirs, val_dirs
 
 
-def _load_trajectory(folder, num_frames, frame_delta_s):
-    if num_frames not in (1, 2):
-        raise ValueError(f'[TRAJECTORY_DATALOADER] unsupported num_frames={num_frames}; expected 1 or 2')
-    if frame_delta_s <= 0:
-        raise ValueError('[TRAJECTORY_DATALOADER] frame_delta_s must be positive')
+def _load_trajectory(folder, frame_offset):
+    if frame_offset not in (0, 1, 2):
+        raise ValueError(f'[TRAJECTORY_DATALOADER] unsupported frame_offset={frame_offset}; expected 0, 1, or 2')
 
     csv_path = opj(folder, 'data.csv')
     if not os.path.isfile(csv_path):
@@ -149,18 +147,14 @@ def _load_trajectory(folder, num_frames, frame_delta_s):
 
     samples, desired_vels, quaternions, labels = [], [], [], []
     for current_index, current in enumerate(frames):
-        current_time, current_image, desired_vel, quaternion, velocity_command, collided = current
+        _, current_image, desired_vel, quaternion, velocity_command, collided = current
         if collided:
             continue
-        if num_frames == 1:
+        if frame_offset == 0:
             image_stack = current_image[np.newaxis, :, :]
         else:
-            history_index = next((
-                candidate_index for candidate_index in range(current_index - 1, -1, -1)
-                if frames[candidate_index][0] <= current_time - frame_delta_s
-                and not frames[candidate_index][5]
-            ), None)
-            if history_index is None:
+            history_index = current_index - frame_offset
+            if history_index < 0 or frames[history_index][5]:
                 continue
             image_stack = np.stack((frames[history_index][1], current_image), axis=0)
         samples.append(image_stack)
@@ -178,16 +172,16 @@ def _load_trajectory(folder, num_frames, frame_delta_s):
     )
 
 
-def _load_split(folders, num_frames, frame_delta_s, split_name):
+def _load_split(folders, frame_offset, split_name):
     images, desired_vels, quaternions, labels, lengths, loaded_dirs, skipped = [], [], [], [], [], [], []
     for folder in folders:
         try:
-            trajectory = _load_trajectory(folder, num_frames, frame_delta_s)
+            trajectory = _load_trajectory(folder, frame_offset)
         except (OSError, ValueError) as exc:
             skipped.append(str(exc))
             continue
         if trajectory is None:
-            skipped.append(f'{folder}: no valid {num_frames}-frame samples')
+            skipped.append(f'{folder}: no valid frame_offset={frame_offset} samples')
             continue
         trajectory_images, trajectory_desvel, trajectory_quat, trajectory_labels = trajectory
         images.append(trajectory_images)
@@ -210,14 +204,14 @@ def _load_split(folders, num_frames, frame_delta_s, split_name):
     ), skipped, loaded_dirs
 
 
-def trajectory_dataloader(data_dir, num_frames, frame_delta_s=0.10, val_split=0.2,
+def trajectory_dataloader(data_dir, frame_offset, val_split=0.2,
                           short=0, seed=None, train_val_dirs=None):
     """Load a dataset root containing only accepted trajectory directories."""
     folders = _trajectory_folders(data_dir)
     train_dirs, val_dirs = _split_trajectory_folders(folders, val_split, short, seed, train_val_dirs)
     train_requested, val_requested = len(train_dirs), len(val_dirs)
-    train_data, train_skipped, train_dirs = _load_split(train_dirs, num_frames, frame_delta_s, 'training')
-    val_data, val_skipped, val_dirs = _load_split(val_dirs, num_frames, frame_delta_s, 'validation')
+    train_data, train_skipped, train_dirs = _load_split(train_dirs, frame_offset, 'training')
+    val_data, val_skipped, val_dirs = _load_split(val_dirs, frame_offset, 'validation')
     stats = {
         'dataset_trajectories': len(folders),
         'train_requested_trajectories': train_requested,
@@ -228,6 +222,8 @@ def trajectory_dataloader(data_dir, num_frames, frame_delta_s=0.10, val_split=0.
         'val_samples': int(val_data[0].shape[0]),
         'train_skipped': train_skipped,
         'val_skipped': val_skipped,
+        'frame_offset': frame_offset,
+        'num_input_frames': 1 if frame_offset == 0 else 2,
     }
     return train_data, val_data, (train_dirs, val_dirs), stats
 

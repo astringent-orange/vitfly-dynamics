@@ -37,33 +37,37 @@ def _write_trajectory(root, name, pixel_offset=0, collision_index=None):
 
 
 class TrajectoryDataloaderTest(unittest.TestCase):
-    def test_two_frame_order_and_trajectory_split(self):
+    def test_three_frame_offsets_and_trajectory_split(self):
         with tempfile.TemporaryDirectory() as dataset_dir:
             for index in range(4):
                 _write_trajectory(dataset_dir, f'traj_{index}', pixel_offset=index * 10)
 
-            train, val, (train_dirs, val_dirs), stats = trajectory_dataloader(
-                dataset_dir, num_frames=2, frame_delta_s=0.10, val_split=0.25, seed=7
-            )
-            train_images, _, _, train_labels, train_lengths = train
-            val_images, _, _, _, val_lengths = val
-            self.assertEqual(train_images.shape[1:], (2, 60, 90))
-            self.assertEqual(train_images.shape[0] + val_images.shape[0], 8)
-            self.assertTrue(np.all(train_lengths == 2))
-            self.assertTrue(np.all(val_lengths == 2))
-            self.assertFalse(set(train_dirs) & set(val_dirs))
-            self.assertEqual(stats['dataset_trajectories'], 4)
-            self.assertTrue(np.allclose(train_labels[:, 0] * 4.0 % 1.0, 0.0))
-            self.assertLess(train_images[0, 0].mean(), train_images[0, 1].mean())
+            expected_samples = {0: 20, 1: 16, 2: 12}
+            for offset, count in expected_samples.items():
+                train, val, (train_dirs, val_dirs), stats = trajectory_dataloader(
+                    dataset_dir, frame_offset=offset, val_split=0.25, seed=7
+                )
+                train_images, _, _, train_labels, train_lengths = train
+                val_images, _, _, _, val_lengths = val
+                expected_channels = 1 if offset == 0 else 2
+                self.assertEqual(train_images.shape[1:], (expected_channels, 60, 90))
+                self.assertEqual(train_images.shape[0] + val_images.shape[0], count)
+                self.assertTrue(np.all(train_lengths > 0))
+                self.assertTrue(np.all(val_lengths > 0))
+                self.assertFalse(set(train_dirs) & set(val_dirs))
+                self.assertEqual(stats['dataset_trajectories'], 4)
+                self.assertTrue(np.allclose(train_labels[:, 0] * 4.0 % 1.0, 0.0))
+                if offset:
+                    self.assertLess(train_images[0, 0].mean(), train_images[0, 1].mean())
 
     def test_collision_current_frame_is_not_used(self):
         with tempfile.TemporaryDirectory() as dataset_dir:
             for index in range(4):
                 _write_trajectory(dataset_dir, f'traj_{index}', collision_index=3)
             train, val, _, _ = trajectory_dataloader(
-                dataset_dir, num_frames=2, frame_delta_s=0.10, val_split=0.25, seed=7
+                dataset_dir, frame_offset=2, val_split=0.25, seed=7
             )
-            self.assertEqual(train[0].shape[0] + val[0].shape[0], 4)
+            self.assertEqual(train[0].shape[0] + val[0].shape[0], 8)
 
 
 if __name__ == '__main__':

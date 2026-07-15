@@ -19,6 +19,7 @@ if torch is not None:
 from astar_planner import DEFAULT_STATIC_INFLATION, StaticAStarPlanner, default_astar_path_cache_path, default_static_map_path, read_path_csv
 from candidate_speed_planner import CandidateSpeedPlanner, CandidateYieldPolicy, PathSpeedController, PolylinePath
 from dynamic_obstacle_predictor import DynamicObstacleTrajectoryPredictor
+from frame_stack import build_frame_stack, MODEL_FRAME_OFFSETS
 
 
 DEFAULT_EXPERT_DYNAMICS = {
@@ -74,7 +75,7 @@ def check_collision(line, obstacle):
     return b**2 - 4 * a * c >= 0
 
 
-def compute_command_vision_based(state, orig_img, prev_img, desiredVel, trained_model, hidden_state):
+def compute_command_vision_based(state, orig_img, frame_history, desiredVel, trained_model, hidden_state, frame_offset=0):
     if torch is None:
         raise RuntimeError("Torch is required for vision-based model inference.")
 
@@ -110,33 +111,33 @@ def compute_command_vision_based(state, orig_img, prev_img, desiredVel, trained_
     q = np.array([state.att[0], state.att[1], state.att[2], state.att[3]])
     
     h, w = (60, 90)
-    img = cv2.resize(orig_img, (w, h))
+    img_stack = build_frame_stack(frame_history, orig_img, frame_offset)
+    if img_stack is None:
+        return None, (orig_img.copy(), orig_img.copy()), hidden_state
+    img = img_stack[-1]
     img2 = orig_img.copy() # used for generating debugimg
-    img = torch.from_numpy(np.array(img)).float().unsqueeze(0)
+    img = torch.from_numpy(img_stack).float()
 
     device = next(trained_model.parameters()).device
 
-    if 'LSTMNet' in trained_model.__class__.__name__:
-        if trained_model.__class__.__name__ == 'LSTMNet':
-            trained_model.lstm.num_layers = 2
-            trained_model.lstm.hidden_size = 395
-        elif trained_model.__class__.__name__ == 'LSTMNetVIT':
-            trained_model.lstm.num_layers = 3
-            trained_model.lstm.hidden_size = 128
-        elif trained_model.__class__.__name__ == 'UNetConvLSTMNet':
-            trained_model.lstm.num_layers = 2
-            trained_model.lstm.hidden_size = 200
-        else:
-            raise Exception ("Incorrect Model specified!!")
-        if state.pos[0] < 0.5 or hidden_state is None:
-            hidden_state = (torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float().to(device), torch.zeros(trained_model.lstm.num_layers, trained_model.lstm.hidden_size).float().to(device))
-        with torch.no_grad():
-            x, hidden_state = trained_model([img.view(1, 1, h, w).to(device), torch.tensor(desiredVel).view(1, 1).float().to(device), torch.tensor(q).view(1,-1).float().to(device) ,hidden_state])
-
-    else:
-
-        with torch.no_grad():
-            x, hidden_state = trained_model([img.view(1, 1, h, w).to(device), torch.tensor(desiredVel).view(1, 1).float().to(device), torch.tensor(q).view(1,-1).float().to(device)])
+    if trained_model.__class__.__name__ not in MODEL_FRAME_OFFSETS:
+        raise ValueError(f'Unsupported inference model {trained_model.__class__.__name__}')
+    if MODEL_FRAME_OFFSETS[trained_model.__class__.__name__] != frame_offset:
+        raise ValueError(
+            f'Model {trained_model.__class__.__name__} requires frame_offset '
+            f'{MODEL_FRAME_OFFSETS[trained_model.__class__.__name__]}, got {frame_offset}'
+        )
+    if state.pos[0] < 0.5:
+        hidden_state = None
+    model_input = [
+        img.view(1, img.shape[0], h, w).to(device),
+        torch.tensor(desiredVel).view(1, 1).float().to(device),
+        torch.tensor(q).view(1, -1).float().to(device),
+    ]
+    if hidden_state is not None:
+        model_input.append(hidden_state)
+    with torch.no_grad():
+        x, hidden_state = trained_model(model_input)
 
 
     x = x.squeeze().detach().cpu().numpy()

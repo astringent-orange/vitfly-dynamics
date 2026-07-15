@@ -58,7 +58,6 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 
 ```text
 training/datasets/dynamic_astar_medium/
-├── accepted_manifest.csv
 ├── trajectory_0001/
 │   ├── data.csv
 │   └── <timestamp>.png
@@ -67,11 +66,11 @@ training/datasets/dynamic_astar_medium/
     └── <timestamp>.png
 ```
 
-数据集根目录的 `accepted_manifest.csv` 必须包含 `status` 和 `trajectory_dir` 字段。加载器只读取 `status=accepted` 的轨迹，不会扫描采集原始目录 `envtest/ros/train_set/`。每条轨迹的 `data.csv` 保留时间戳、姿态、期望速度和专家速度标签，不能删除。
+数据集目录只能包含已接受的轨迹目录；加载器会直接扫描这些目录，不使用 manifest，也不会扫描采集原始目录 `envtest/ros/train_set/`。每条轨迹的 `data.csv` 保留时间戳、姿态、期望速度和专家速度标签，不能删除。
 
 ### 4. 开始训练
 
-从仓库根目录执行。单帧与双帧训练使用同一数据集和同一 accepted 清单，只有模型及输入帧数不同：
+从仓库根目录执行。单帧与双帧训练使用同一 accepted-only 数据集，只有模型及输入帧数不同：
 
 ```bash
 # 单帧 ViT-LSTM 基线
@@ -97,7 +96,7 @@ tensorboard --logdir training/logs
 
 ## 开发与发布约定
 
-完整的开发与采集环境保留在本地 `main` 分支。代码修改在 `main`（或从它创建的 `feat/*` 分支）完成、测试并提交；随后将已验证的源码改动同步到 `code-release` 并推送至 GitHub。`code-release` 不包含训练数据和仿真大型资产，服务器仅使用该分支训练。
+完整的开发与采集环境保留在本地 `main` 分支。代码修改在 `main`（或从它创建的 `feat/*` 分支）完成、测试并提交；随后将已验证的源码改动同步到 `code-release`。在执行任何 `git push` 上传到 GitHub 前，必须先向用户说明将发布的提交并获得明确同意。`code-release` 不包含训练数据和仿真大型资产，服务器仅使用该分支训练。
 
 ## 训练实现说明
 
@@ -108,4 +107,4 @@ tensorboard --logdir training/logs
 
 ## 仿真与数据采集
 
-Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。原始采集结果保存在 `envtest/ros/train_set/`；请先完成筛选和数据集整理，再复制 accepted 轨迹到 `training/datasets/<dataset_name>/`。
+Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。原始采集结果保存在 `envtest/ros/train_set/`；每批采集先运行 `curate_dataset.py ... --apply` 删除 rejected 轨迹，并更新唯一的 `collection_summary.json`，再复制保留轨迹到 `training/datasets/<dataset_name>/`。

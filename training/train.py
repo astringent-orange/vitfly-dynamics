@@ -46,9 +46,7 @@ class TRAINER:
             self.short = args.short
 
             self.model_type = args.model_type
-            self.dataset_mode = args.dataset_mode
             self.frame_delta_s = args.frame_delta_s
-            self.manifest_filename = args.manifest_filename
             self.val_split = args.val_split
             self.seed = args.seed # if args.seed>0 else None
             self.load_checkpoint = args.load_checkpoint
@@ -179,80 +177,49 @@ class TRAINER:
 
     def dataloader(self, val_split, short=0, seed=None, train_val_dirs=None):
         self.mylogger(f'[DATALOADER] Loading from {self.dataset_dir}')
-        if self.dataset_mode == 'accepted_manifest':
-            num_frames = 2 if self.model_type == 'TwoFrameViTLSTM' else 1
-            if self.model_type not in ('ViTLSTM', 'TwoFrameViTLSTM'):
-                raise ValueError(
-                    '[DATALOADER] accepted_manifest mode supports only ViTLSTM or TwoFrameViTLSTM'
-                )
-            train_data, val_data, (self.train_dirs, self.val_dirs), stats = manifest_dataloader(
-                opj(self.basedir, self.dataset_dir),
-                num_frames=num_frames,
-                frame_delta_s=self.frame_delta_s,
-                val_split=val_split,
-                short=short,
-                seed=seed,
-                train_val_dirs=train_val_dirs,
-                manifest_filename=self.manifest_filename,
-            )
-            self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd, self.train_trajlength = train_data
-            self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd, self.val_trajlength = val_data
-            self.train_meta = self.train_currctbr = None
-            self.val_meta = self.val_currctbr = None
-            self.manifest_stats = stats
+        num_frames = 2 if self.model_type == 'TwoFrameViTLSTM' else 1
+        if self.model_type not in ('ViTLSTM', 'TwoFrameViTLSTM'):
+            raise ValueError('[DATALOADER] training supports only ViTLSTM or TwoFrameViTLSTM')
+        train_data, val_data, (self.train_dirs, self.val_dirs), stats = trajectory_dataloader(
+            opj(self.basedir, self.dataset_dir), num_frames=num_frames,
+            frame_delta_s=self.frame_delta_s, val_split=val_split, short=short,
+            seed=seed, train_val_dirs=train_val_dirs,
+        )
+        self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd, self.train_trajlength = train_data
+        self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd, self.val_trajlength = val_data
+        self.dataset_stats = stats
+        self.mylogger(
+            f'[DATALOADER] accepted-only directories | frames={num_frames}, delta={self.frame_delta_s:.3f}s, '
+            f'trajectories={stats["dataset_trajectories"]}, train={stats["train_loaded_trajectories"]}, '
+            f'samples={stats["train_samples"]}, val={stats["val_loaded_trajectories"]}, '
+            f'val samples={stats["val_samples"]}'
+        )
+        if stats['train_skipped'] or stats['val_skipped']:
             self.mylogger(
-                f'[DATALOADER] accepted manifest | frames={num_frames}, delta={self.frame_delta_s:.3f}s, '
-                f'accepted trajectories={stats["accepted_trajectories"]}, '
-                f'train trajectories={stats["train_loaded_trajectories"]}, samples={stats["train_samples"]}, '
-                f'val trajectories={stats["val_loaded_trajectories"]}, samples={stats["val_samples"]}'
+                f'[DATALOADER] skipped invalid trajectories | train={len(stats["train_skipped"])}, '
+                f'val={len(stats["val_skipped"])}'
             )
-            if stats['train_skipped'] or stats['val_skipped']:
-                self.mylogger(
-                    f'[DATALOADER] skipped invalid trajectories | train={len(stats["train_skipped"])}, '
-                    f'val={len(stats["val_skipped"])}'
-                )
-            self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd = preload(
-                (self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd), self.device
-            )
-            self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd = preload(
-                (self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd), self.device
-            )
-            self.mylogger(f'[DATALOADER] Preloading into device {self.device} done')
-            assert self.train_ims.shape[1] == num_frames, 'Unexpected manifest image channel count'
-            assert self.train_ims.max() <= 1.0 and self.train_ims.min() >= 0.0, 'Images not normalized'
-            np.save(opj(self.workspace, 'train_val_dirs.npy'), np.array((self.train_dirs, self.val_dirs), dtype=object))
-            self._write_run_metadata(num_frames)
-            return
-
-        train_data, val_data, is_png, (self.train_dirs, self.val_dirs) = dataloader(opj(self.basedir, self.dataset_dir), val_split=val_split, short=short, seed=seed, train_val_dirs=train_val_dirs)
-        self.train_meta, self.train_ims, self.train_trajlength, self.train_desvel, self.train_currquat, self.train_currctbr = train_data
-        self.val_meta, self.val_ims, self.val_trajlength, self.val_desvel, self.val_currquat, self.val_currctbr = val_data
-        self.mylogger(f'[DATALOADER] Dataloading done | train images {self.train_ims.shape}, val images {self.val_ims.shape}')
-
-        self.train_meta, self.train_ims, self.train_desvel, self.train_currquat, self.train_currctbr = preload((self.train_meta, self.train_ims, self.train_desvel, self.train_currquat, self.train_currctbr), self.device)
-        self.val_meta, self.val_ims, self.val_desvel, self.val_currquat, self.val_currctbr = preload((self.val_meta, self.val_ims, self.val_desvel, self.val_currquat, self.val_currctbr), self.device)
+        self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd = preload(
+            (self.train_ims, self.train_desvel, self.train_currquat, self.train_velcmd), self.device
+        )
+        self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd = preload(
+            (self.val_ims, self.val_desvel, self.val_currquat, self.val_velcmd), self.device
+        )
         self.mylogger(f'[DATALOADER] Preloading into device {self.device} done')
-
-        assert self.train_ims.max() <= 1.0 and self.train_ims.min() >= 0.0, 'Images not normalized (values outside [0.0, 1.0])'
-        assert self.train_ims.max() > 0.50, "Images not normalized (values only below 0.10, possibly due to not normalizing images from 'old' dataset)"
-
-        self.train_velcmd = self.train_meta[:, range(13, 16) if is_png else range(12, 15)]
-        self.val_velcmd = self.val_meta[:, range(13, 16) if is_png else range(12, 15)]
-
-        # save train and val dirs in workspace for later use
+        assert self.train_ims.shape[1] == num_frames, 'Unexpected image channel count'
+        assert self.train_ims.max() <= 1.0 and self.train_ims.min() >= 0.0, 'Images not normalized'
         np.save(opj(self.workspace, 'train_val_dirs.npy'), np.array((self.train_dirs, self.val_dirs), dtype=object))
+        self._write_run_metadata(num_frames)
 
     def _write_run_metadata(self, num_frames):
         metadata = {
             'model_type': self.model_type,
-            'dataset_mode': self.dataset_mode,
             'dataset': self.dataset_name,
-            'manifest_filename': self.manifest_filename,
             'frame_delta_s': self.frame_delta_s,
             'num_frames': num_frames,
             'train_trajectories': len(self.train_dirs),
             'val_trajectories': len(self.val_dirs),
-            'manifest_stats': self.manifest_stats,
+            'dataset_stats': self.dataset_stats,
         }
         with open(opj(self.workspace, 'run_metadata.json'), 'w') as stream:
             json.dump(metadata, stream, indent=2, sort_keys=True)
@@ -309,15 +276,14 @@ class TRAINER:
             self.model.train()
             for it in range(self.num_training_steps):
                 self.optimizer.zero_grad()
-                start = train_traj_starts[it] + (0 if self.dataset_mode == 'accepted_manifest' else 1)
+                start = train_traj_starts[it]
                 stop = train_traj_starts[it] + train_traj_lengths[it]
-                traj_input = self.train_ims[start:stop] if self.dataset_mode == 'accepted_manifest' else self.train_ims[start:stop, :, :].unsqueeze(1)
+                traj_input = self.train_ims[start:stop]
                 desvel = self.train_desvel[start:stop].view(-1, 1)
                 currquat = self.train_currquat[start:stop]
                 pred, _ = self.model([traj_input, desvel, currquat]) #, (init_hidden_state, init_cell_state)])
                 cmd = self.train_velcmd[start:stop, :]
-                cmd_norm = cmd if self.dataset_mode == 'accepted_manifest' else cmd / desvel
-                loss = F.mse_loss(cmd_norm, pred)
+                loss = F.mse_loss(cmd, pred)
                 ep_loss += loss
                 loss.backward()
                 gradnorm += torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=torch.inf)
@@ -364,15 +330,14 @@ class TRAINER:
                 # init_hidden_state[0] = self.train_velcmd[val_traj_starts[it], :].view(1, 1, -1)
                 # init_cell_state = torch.rand(self.model.lstm.num_layers, 1, 3).to(self.device).float()
 
-                start = val_traj_starts[it] + (0 if self.dataset_mode == 'accepted_manifest' else 1)
+                start = val_traj_starts[it]
                 stop = val_traj_starts[it] + self.val_trajlength[it]
-                traj_input = self.val_ims[start:stop] if self.dataset_mode == 'accepted_manifest' else self.val_ims[start:stop, :, :].unsqueeze(1)
+                traj_input = self.val_ims[start:stop]
                 desvel = self.val_desvel[start:stop].view(-1, 1)
                 currquat = self.val_currquat[start:stop]
                 pred, _ = self.model([traj_input, desvel, currquat]) #, (init_hidden_state, init_cell_state)])
                 cmd = self.val_velcmd[start:stop, :]
-                cmd_norm = cmd if self.dataset_mode == 'accepted_manifest' else cmd / desvel
-                loss = F.mse_loss(cmd_norm, pred)
+                loss = F.mse_loss(cmd, pred)
                 ep_loss += loss
 
             ep_loss /= (it+1)
@@ -395,9 +360,7 @@ def argparsing():
     parser.add_argument('--ws_suffix', type=str, default='', help='suffix if any to workspace name')
     parser.add_argument('--model_type', type=str, default='LSTMNet', help='string matching model name in lstmArch.py')
     parser.add_argument('--dataset', type=str, default='5-2', help='name of dataset')
-    parser.add_argument('--dataset_mode', type=str, choices=('legacy', 'accepted_manifest'), default='legacy', help='legacy loader or accepted-manifest sequence loader')
-    parser.add_argument('--manifest_filename', type=str, default='accepted_manifest.csv', help='accepted manifest filename inside the dataset directory')
-    parser.add_argument('--frame_delta_s', type=float, default=0.10, help='target history interval for multi-frame manifest samples')
+    parser.add_argument('--frame_delta_s', type=float, default=0.10, help='target history interval for two-frame samples')
     parser.add_argument('--short', type=int, default=0, help='if nonzero, how many trajectory folders to load')
     parser.add_argument('--val_split', type=float, default=0.2, help='fraction of dataset to use for validation')
     parser.add_argument('--seed', type=int, default=None, help='random seed to use for python random, numpy, and torch -- WARNING, probably not fully implemented')

@@ -4,8 +4,6 @@ logdir = training/logs
 datadir = training/datasets
 
 dataset = dynamic_astar_medium
-dataset_mode = accepted_manifest
-manifest_filename = accepted_manifest.csv
 frame_delta_s = 0.10
 short = 0
 val_split = 0.2

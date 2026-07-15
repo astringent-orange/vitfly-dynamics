@@ -57,7 +57,7 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 将筛选后的数据集放在以下位置（目录名必须与训练配置中的 `dataset` 一致）：
 
 ```text
-training/datasets/dynamic_astar_medium/
+training/datasets/dataset/
 ├── trajectory_0001/
 │   ├── data.csv
 │   └── <timestamp>.png
@@ -66,11 +66,11 @@ training/datasets/dynamic_astar_medium/
     └── <timestamp>.png
 ```
 
-数据集目录只能包含已接受的轨迹目录；加载器会直接扫描这些目录，不使用 manifest，也不会扫描采集原始目录 `envtest/ros/train_set/`。每条轨迹的 `data.csv` 保留时间戳、姿态、期望速度和专家速度标签，不能删除。
+数据集目录只放筛选后保留的轨迹目录。每条轨迹的 `data.csv` 保留时间戳、姿态、期望速度和专家速度标签，不能删除。
 
 ### 4. 开始训练
 
-从仓库根目录执行。单帧与双帧训练使用同一 accepted-only 数据集，只有模型及输入帧数不同：
+从仓库根目录执行。单帧与双帧训练使用同一数据集，只有模型及输入帧数不同：
 
 ```bash
 # 单帧 ViT-LSTM 基线
@@ -83,6 +83,21 @@ CUDA_VISIBLE_DEVICES=0 python training/train.py \
 ```
 
 训练日志、checkpoint、训练/验证轨迹划分和运行元数据写入 `training/logs/`。服务器长任务建议在 `tmux` 或作业调度器中运行。
+
+一次训练会创建一个按启动时间命名的运行目录，结构示例如下：
+
+```text
+training/logs/
+└── d07_15_t17_30/
+    ├── args.txt                 # 解析后的全部启动参数
+    ├── config.txt               # 本次使用的配置文件快照
+    ├── log.txt                  # 数据加载、训练和验证输出
+    ├── run_metadata.json        # 模型、帧数、数据集和数据划分统计
+    ├── train_val_dirs.npy       # 固定的训练/验证轨迹目录划分
+    ├── events.out.tfevents.*    # TensorBoard 标量事件
+    ├── model_000025.pth         # 按 save_model_freq 保存的 checkpoint
+    └── model_000099.pth         # 训练结束时的 checkpoint（epoch 取决于配置）
+```
 
 查看训练曲线：
 
@@ -107,4 +122,4 @@ tensorboard --logdir training/logs
 
 ## 仿真与数据采集
 
-Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。使用 `bash launch_evaluation.bash <N> state` 完成一批采集后，脚本会自动运行 `envtest/ros/curate_dataset.py --apply`：删除 rejected 轨迹，并更新 `envtest/ros/train_set/collection_summary.json`（采集批数、总轨迹数、accepted/rejected 数）。随后将 `train_set/` 中保留的轨迹目录复制到 `training/datasets/<dataset_name>/`；不要复制 `collection_summary.json`。
+Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。使用 `bash launch_evaluation.bash <N> state` 完成一批采集后，脚本会自动筛选并删除 rejected 轨迹，同时更新 `envtest/ros/train_set/collection_summary.json`（采集批数、总轨迹数、accepted/rejected 数）。随后将 `train_set/` 中保留的轨迹目录复制到 `training/datasets/dataset/`；不要复制 `collection_summary.json`。

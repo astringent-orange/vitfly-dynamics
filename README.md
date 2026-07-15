@@ -107,4 +107,4 @@ tensorboard --logdir training/logs
 
 ## 仿真与数据采集
 
-Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。原始采集结果保存在 `envtest/ros/train_set/`；每批采集先运行 `curate_dataset.py ... --apply` 删除 rejected 轨迹，并更新唯一的 `collection_summary.json`，再复制保留轨迹到 `training/datasets/<dataset_name>/`。
+Flightmare/ROS 仿真和数据采集需要额外的环境资源与系统依赖，不属于上述服务器训练最小环境。使用 `bash launch_evaluation.bash <N> state` 完成一批采集后，脚本会自动运行 `envtest/ros/curate_dataset.py --apply`：删除 rejected 轨迹，并更新 `envtest/ros/train_set/collection_summary.json`（采集批数、总轨迹数、accepted/rejected 数）。随后将 `train_set/` 中保留的轨迹目录复制到 `training/datasets/<dataset_name>/`；不要复制 `collection_summary.json`。

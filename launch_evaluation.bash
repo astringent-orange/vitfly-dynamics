@@ -396,3 +396,10 @@ if [ $ROS_PID ]
 then
   kill -SIGINT "$ROS_PID"
 fi
+
+if [ "$2" = "state" ]
+then
+  echo "[LAUNCH SCRIPT] Curating the completed state-collection batch."
+  python3 ./envtest/ros/curate_dataset.py ./envtest/ros/train_set \
+    --evaluation "$SUMMARY_FILE" --latest "$N" --apply || exit 1
+fi

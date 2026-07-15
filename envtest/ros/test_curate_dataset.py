@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import yaml
 
-from curate_dataset import curate_dataset, write_manifest
+from curate_dataset import apply_curation, curate_dataset
 
 
 class CurateDatasetTest(unittest.TestCase):
@@ -33,7 +33,7 @@ class CurateDatasetTest(unittest.TestCase):
 
     @patch("curate_dataset._path_metrics", return_value=(0.0, 0.0))
     @patch("curate_dataset.validate_trajectory")
-    def test_manifest_accepts_only_hard_safe_rollouts(self, validate, _metrics):
+    def test_apply_keeps_only_hard_safe_rollouts(self, validate, _metrics):
         validate.side_effect = [([], 1, 0, {"environment_0"}), ([], 1, 0, {"environment_0"}),
                                 ([], 1, 0, {"environment_1"}), ([], 1, 0, {"environment_1"})]
         with tempfile.TemporaryDirectory() as root:
@@ -46,14 +46,13 @@ class CurateDatasetTest(unittest.TestCase):
                     "rollout_2": {"Success": False, "number_crashes": 1},
                 }, stream)
             records = curate_dataset(root, evaluation_path)
-            output = os.path.join(root, "accepted_manifest.csv")
-            write_manifest(records, output)
-            with open(output, newline="") as stream:
-                manifest = list(csv.DictReader(stream))
+            summary = apply_curation(root, records)
 
         self.assertEqual([record["status"] for record in records], ["accepted", "rejected"])
         self.assertIn("number_crashes=1", records[1]["hard_reasons"])
-        self.assertEqual(len(manifest), 2)
+        self.assertEqual(summary["collection_runs"], 1)
+        self.assertEqual(summary["accepted_trajectories"], 1)
+        self.assertEqual(summary["rejected_trajectories"], 1)
 
 
 if __name__ == "__main__":

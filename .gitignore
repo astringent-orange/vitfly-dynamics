@@ -1,0 +1,25 @@
+*pycache*
+.vscode
+checklist.md
+*.dat
+*.code-workspace
+envtest/ros/train_set/
+
+# Generated experiment artifacts: distribute these outside Git.
+training/datasets/
+training/logs/
+models/*.pth
+models/*.pt
+models/*.ckpt
+envtest/ros/summary.yaml
+evaluation.yaml
+
+# Downloaded or generated simulation assets.
+flightmare/flightrender/
+flightmare/flightpy/configs/vision/dynamic_astar_medium/
+flightmare/flightros/src/motion_planning/data/*.ply
+
+# Optional presentation and documentation media.
+media/
+flightmare/docs/source/_images/
+flightmare/docs/flightmare.png

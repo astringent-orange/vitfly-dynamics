@@ -25,11 +25,11 @@ git pull --ff-only origin code-release
 
 ### 2. 创建 Python 环境
 
-建议使用 Python 3.10 或与服务器 PyTorch/CUDA 组合兼容的 Python 版本：
+建议通过 Conda 创建独立环境，并使用 Python 3.10（或与服务器 PyTorch/CUDA 组合兼容的版本）：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+conda create -n vitfly-dynamics python=3.10 pip -y
+conda activate vitfly-dynamics
 python -m pip install --upgrade pip
 ```
 

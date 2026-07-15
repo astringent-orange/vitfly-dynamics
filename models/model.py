@@ -113,10 +113,13 @@ class LSTMNetVIT(nn.Module):
     ViT+LSTM Network 
     Num Params: 3,563,663   
     """
-    def __init__(self):
+    def __init__(self, input_channels=1):
         super().__init__()
+        if input_channels not in (1, 2):
+            raise ValueError('LSTMNetVIT input_channels must be 1 or 2')
+        self.input_channels = input_channels
         self.encoder_blocks = nn.ModuleList([
-            MixTransformerEncoderLayer(1, 32, patch_size=7, stride=4, padding=3, n_layers=2, reduction_ratio=8, num_heads=1, expansion_factor=8),
+            MixTransformerEncoderLayer(input_channels, 32, patch_size=7, stride=4, padding=3, n_layers=2, reduction_ratio=8, num_heads=1, expansion_factor=8),
             MixTransformerEncoderLayer(32, 64, patch_size=3, stride=2, padding=1, n_layers=2, reduction_ratio=4, num_heads=2, expansion_factor=8)
         ])
 
@@ -134,6 +137,11 @@ class LSTMNetVIT(nn.Module):
         X = refine_inputs(X)
 
         x = X[0]
+        if x.ndim != 4 or x.shape[1] != self.input_channels:
+            raise ValueError(
+                f'{self.__class__.__name__} expects image shape [T, {self.input_channels}, H, W], '
+                f'got {tuple(x.shape)}'
+            )
         embeds = [x]
         for block in self.encoder_blocks:
             embeds.append(block(embeds[-1]))        
@@ -149,35 +157,31 @@ class LSTMNetVIT(nn.Module):
         out = self.nn_fc2(out)
         return out, h
 
-class TwoFrameViTLSTM(LSTMNetVIT):
-    """ViT+LSTM policy for temporally stacked two-frame depth input.
+class CurrentFrameViTLSTM(LSTMNetVIT):
+    """ViT+LSTM policy using only the current depth frame."""
 
-    This class intentionally keeps the original :class:`LSTMNetVIT` encoder,
-    decoder, LSTM, metadata interface, and output head unchanged.  Only the
-    first patch-merging layer receives two depth channels: historical depth in
-    channel 0 and current depth in channel 1.
-    """
+    frame_offset = 0
+
     def __init__(self):
-        super().__init__()
-        self.encoder_blocks[0] = MixTransformerEncoderLayer(
-            2, 32, patch_size=7, stride=4, padding=3,
-            n_layers=2, reduction_ratio=8, num_heads=1,
-            expansion_factor=8,
-        )
+        super().__init__(input_channels=1)
 
-    def forward(self, X):
-        if not isinstance(X, (list, tuple)) or len(X) < 3:
-            raise ValueError(
-                "TwoFrameViTLSTM expects [images, desired_velocity, quaternion] "
-                "with an optional LSTM hidden state."
-            )
-        images = X[0]
-        if images.ndim != 4 or images.shape[1] != 2:
-            raise ValueError(
-                "TwoFrameViTLSTM expects depth images with shape "
-                "[time_or_batch, 2, height, width]."
-            )
-        return super().forward(X)
+
+class PreviousFrameViTLSTM(LSTMNetVIT):
+    """ViT+LSTM policy using ``[D_{t-1}, D_t]``."""
+
+    frame_offset = 1
+
+    def __init__(self):
+        super().__init__(input_channels=2)
+
+
+class SecondPreviousFrameViTLSTM(LSTMNetVIT):
+    """ViT+LSTM policy using ``[D_{t-2}, D_t]``."""
+
+    frame_offset = 2
+
+    def __init__(self):
+        super().__init__(input_channels=2)
 
 class ViT(nn.Module):
     """
@@ -310,10 +314,14 @@ if __name__ == '__main__':
     print("VIT: ")
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-    model = LSTMNetVIT().float()
-    print("VITLSTM: ")
+    model = CurrentFrameViTLSTM().float()
+    print("CurrentFrameViTLSTM: ")
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-    model = TwoFrameViTLSTM().float()
-    print("TWO FRAME VITLSTM: ")
+    model = PreviousFrameViTLSTM().float()
+    print("PreviousFrameViTLSTM: ")
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+    model = SecondPreviousFrameViTLSTM().float()
+    print("SecondPreviousFrameViTLSTM: ")
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))

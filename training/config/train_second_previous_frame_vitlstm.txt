@@ -4,12 +4,12 @@ logdir = training/logs
 datadir = training/datasets
 
 dataset = dataset
-frame_delta_s = 0.10
+model_type = SecondPreviousFrameViTLSTM
+frame_offset = 2
 short = 0
 val_split = 0.2
 seed = 0
 
-model_type = TwoFrameViTLSTM
 load_checkpoint = False
 checkpoint_path = ''
 

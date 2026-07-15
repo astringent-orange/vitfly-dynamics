@@ -295,6 +295,8 @@ class AgilePilotNode:
         if frame_offset != expected_offset:
             raise ValueError(f'{model_type} requires frame_offset={expected_offset}, got {frame_offset}')
         self.frame_offset = frame_offset
+        if self.vision_based and model_path is None:
+            raise ValueError('[RUN_COMPETITION] vision-based inference requires --model_path')
 
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")

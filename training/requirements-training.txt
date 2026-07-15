@@ -1,0 +1,10 @@
+# Runtime dependencies for training from src/vitfly.
+#
+# Install PyTorch separately so that the wheel matches the server's CUDA driver:
+# https://pytorch.org/get-started/locally/
+# The development environment uses torch 2.4.1 with CUDA 12.1.
+
+numpy>=1.22,<2
+opencv-python-headless>=4.5
+tensorboard>=2.8
+configargparse>=1.5

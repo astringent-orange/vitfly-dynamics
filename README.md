@@ -114,6 +114,33 @@ bash launch_evaluation.bash 1 vision \
 tensorboard --logdir training/logs
 ```
 
+## 森林场景 Benchmark
+
+基于原版 `trees` 地图生成可复现的 low/medium/high 森林密度和三种动态障碍物 profile。medium 保留原始100棵树；飞行速度条件为3、5、7m/s；动态 profile 为关闭、采集速度和1.5倍采集速度。
+
+```bash
+python3 envtest/benchmark/generate_forest_scenes.py \
+  --config envtest/benchmark/configs/forest_benchmark_v1.yaml
+python3 envtest/benchmark/build_manifest.py \
+  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
+  --output envtest/benchmark/manifests
+```
+
+运行三种帧输入消融：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
+  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
+  --policy ours_single --policy ours_adjacent --policy ours_skip_one \
+  --output results/forest_ablation_v1 --resume
+python3 envtest/benchmark/summarize_results.py \
+  --results results/forest_ablation_v1/results.csv \
+  --output results/forest_ablation_v1 --select-best
+```
+
+主实验可以通过 `--scenario flight_speed_3`、`--scenario forest_density_high` 或 `--scenario dynamic_high` 切换条件；省略该参数运行全部条件。使用 `--limit 3 --dry-run` 做接口 smoke test，使用 `--resume` 跳过已完成的 policy/case。结果目录包含 `results.csv`、逐 rollout 日志、`summary.csv`、`summary.json`、`paired_model_differences.csv` 和图表。成功定义为到达目标且零碰撞，飞行时间只统计成功 rollout。FastPlanner/EGO-Planner 预留为 ROS policy adapter，不改变既有 manifest。
+
 ## 数据与模型资产
 
 不要将数据集、checkpoint、Flightmare 环境资源或 Unity 二进制文件提交到 Git。它们应通过服务器共享存储、`rsync` 或单独的制品存储传输。发布分支的忽略规则和资产说明见 [ARTIFACTS.md](ARTIFACTS.md)。

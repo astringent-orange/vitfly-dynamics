@@ -1,0 +1,72 @@
+experiment_id: forest_benchmark_v1
+
+source_level: trees
+output_level: forest_benchmark_v1
+scene_seed: 20260716
+
+policies:
+  - id: ours_single
+    adapter: vitfly_neural
+    checkpoint: /path/to/current_frame_vitlstm.pth
+    frame_offset: 0
+  - id: ours_adjacent
+    adapter: vitfly_neural
+    checkpoint: /path/to/previous_frame_vitlstm.pth
+    frame_offset: 1
+  - id: ours_skip_one
+    adapter: vitfly_neural
+    checkpoint: /path/to/second_previous_frame_vitlstm.pth
+    frame_offset: 2
+  - id: original_vitfly
+    adapter: vitfly_legacy
+    checkpoint: /path/to/original_vitfly.pth
+    frame_offset: 0
+
+scenario:
+  map_ids:
+    validation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    test: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  phase_seeds:
+    validation: [8000, 8001, 8002, 8003, 8004]
+    test: [9000, 9001, 9002, 9003, 9004]
+  desired_speeds: [3.0, 5.0, 7.0]
+  density_counts:
+    low: 50
+    medium: 100
+    high: 150
+  dynamic:
+    count: 8
+    collection_speed_multiplier: 1.0
+    high_speed_multiplier: 1.5
+    medium_period_seconds: [6.0, 10.0]
+  forest_roi: [2.0, 60.0, -10.0, 10.0]
+  min_tree_spacing: 1.0
+  endpoint_clearance: 3.0
+  astar_resolution: 0.3
+  static_inflation: 0.9
+
+evaluation_profiles:
+  strict:
+    start_x: 0.5
+    goal_x: 60.0
+    timeout_seconds: 60.0
+    collision_margin: 0.0
+    bounding_box: [-5.0, 65.0, -10.0, 10.0, 0.0, 10.0]
+    plots: false
+
+design:
+  ablation_validation:
+    split: validation
+    speed: 5.0
+    density: medium
+    dynamic_profiles: [dynamic_off, dynamic_collection, dynamic_high]
+  comparison_test:
+    split: test
+    scenarios:
+      - baseline
+      - flight_speed_3
+      - flight_speed_7
+      - forest_density_low
+      - forest_density_high
+      - dynamic_off
+      - dynamic_high

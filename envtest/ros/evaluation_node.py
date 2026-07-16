@@ -21,7 +21,7 @@ class Evaluator:
 
         self.exp_name = exp_name
 
-        self.xmax = int(self.config["target"])
+        self.xmax = int(float(os.environ.get("VITFLY_EVAL_GOAL_X", self.config["target"])))
 
         self.is_active = False
         self.pos = []
@@ -30,16 +30,22 @@ class Evaluator:
 
         self.hit_obstacle = False
         self.crash = 0
-        self.timeout = self.config["timeout"]
-        self.bounding_box = np.reshape(
-            np.array(self.config["bounding_box"], dtype=float), (3, 2)
-        ).T
+        self.timeout = float(os.environ.get("VITFLY_EVAL_TIMEOUT_SECONDS", self.config["timeout"]))
+        self.collision_margin = float(os.environ.get("VITFLY_EVAL_COLLISION_MARGIN", "0.0"))
+        bounds_text = os.environ.get("VITFLY_EVAL_BOUNDING_BOX", "")
+        bounds = [float(value) for value in bounds_text.split(",")] if bounds_text else self.config["bounding_box"]
+        if len(bounds) != 6:
+            raise ValueError("VITFLY_EVAL_BOUNDING_BOX must contain six comma-separated values")
+        self.bounding_box = np.reshape(np.array(bounds, dtype=float), (3, 2)).T
+        self.start_x = float(os.environ.get("VITFLY_EVAL_START_X", "0.5"))
 
         self._initSubscribers(config["topics"])
         self._initPublishers(config["topics"])
 
         self.ctr = 0
         self.start_time_mark = False
+        self.goal_reached = False
+        self.termination_reason = None
 
     def _initSubscribers(self, config):
         self.state_sub = rospy.Subscriber(
@@ -84,7 +90,7 @@ class Evaluator:
         self.pos_x = msg.pose.position.x
 
         # mark start time based on position rather than start signal
-        if self.pos_x > 0.5 and not self.start_time_mark:
+        if self.pos_x > self.start_x and not self.start_time_mark:
             self.time_array[0] = rospy.get_rostime().to_sec()
             self.start_time_mark = True
 
@@ -108,7 +114,8 @@ class Evaluator:
         bin_x = int(max(min(np.floor(self.pos_x), self.xmax), 0))
         if np.isnan(self.time_array[bin_x]):
             self.time_array[bin_x] = rospy.get_rostime().to_sec()
-        if self.pos_x > 60:
+        if self.pos_x >= self.xmax:
+            self.goal_reached = True
             self.is_active = False
             self.publishFinish()
 
@@ -118,6 +125,7 @@ class Evaluator:
         outside = ((pos[1:] > self.bounding_box[1, :]) | (pos[1:] < self.bounding_box[0, :])
         ).any(axis=-1)
         if (outside == True).any():
+            self.termination_reason = "out_of_bounds"
             self.abortRun()
 
     # Note, the start signal may need to be sent multiple times. Sometimes once doesn't work.
@@ -138,7 +146,7 @@ class Evaluator:
             for obs in msg.obstacles
         )
         self.dist.append([msg.header.stamp.to_sec(), margin])
-        if margin < 0:
+        if margin < self.collision_margin:
             if not self.hit_obstacle:
                 self.crash += 1
                 print("Crashed")
@@ -150,6 +158,12 @@ class Evaluator:
         print("You did not reach the goal!")
         summary = {}
         summary["Success"] = False
+        summary["goal_reached"] = bool(self.goal_reached)
+        summary["collision"] = bool(self.crash > 0)
+        summary["collision_count"] = int(self.crash)
+        summary["termination_reason"] = self.termination_reason or ("collision" if self.crash else "timeout")
+        if self.time_array[0] == self.time_array[0]:
+            summary["termination_elapsed_time"] = rospy.get_time() - self.time_array[0]
         with open("summary.yaml", "w") as f:
             if os.getenv("ROLLOUT_NAME") is not None:
                 tmp = {}
@@ -234,6 +248,9 @@ class Evaluator:
         ttf = self.time_array[-1] - self.time_array[0]
         summary = {}
         summary["Success"] = True if self.crash == 0 else False
+        summary["goal_reached"] = True
+        summary["collision"] = bool(self.crash > 0)
+        summary["termination_reason"] = "goal_reached" if self.crash == 0 else "goal_reached_with_collision"
         print("You reached the goal in %5.3f seconds" % ttf)
         summary["time_to_finish"] = ttf
         print("Your intermediate times are:")
@@ -244,6 +261,8 @@ class Evaluator:
             summary["segment_times"]["%i" % i] = self.time_array[i] - self.time_array[0]
         print("You hit %i obstacles" % self.crash)
         summary["number_crashes"] = self.crash
+        summary["collision_count"] = self.crash
+        summary["termination_elapsed_time"] = ttf
         with open("summary.yaml", "w") as f:
             if os.getenv("ROLLOUT_NAME") is not None:
                 tmp = {}

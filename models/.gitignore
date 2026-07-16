@@ -1,1 +1,4 @@
 *.pth
+current_frame/
+previous_frame/
+second_previous_frame/

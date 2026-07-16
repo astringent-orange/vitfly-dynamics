@@ -7,19 +7,19 @@ scene_seed: 20260716
 policies:
   - id: ours_single
     adapter: vitfly_neural
-    checkpoint: /path/to/current_frame_vitlstm.pth
+    checkpoint: models/current_frame/current_frame_vitlstm_000099.pth
     frame_offset: 0
   - id: ours_adjacent
     adapter: vitfly_neural
-    checkpoint: /path/to/previous_frame_vitlstm.pth
+    checkpoint: models/previous_frame/previous_frame_vitlstm_000099.pth
     frame_offset: 1
   - id: ours_skip_one
     adapter: vitfly_neural
-    checkpoint: /path/to/second_previous_frame_vitlstm.pth
+    checkpoint: models/second_previous_frame/second_previous_frame_vitlstm_000099.pth
     frame_offset: 2
   - id: original_vitfly
     adapter: vitfly_legacy
-    checkpoint: /path/to/original_vitfly.pth
+    checkpoint: models/ViTLSTM_model.pth
     frame_offset: 0
 
 scenario:

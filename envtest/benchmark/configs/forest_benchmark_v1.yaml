@@ -5,15 +5,15 @@ output_level: forest_benchmark_v1
 scene_seed: 20260716
 
 policies:
-  - id: ours_single
+  - id: single
     adapter: vitfly_neural
     checkpoint: models/current_frame/current_frame_vitlstm_000099.pth
     frame_offset: 0
-  - id: ours_adjacent
+  - id: adjacent
     adapter: vitfly_neural
     checkpoint: models/previous_frame/previous_frame_vitlstm_000099.pth
     frame_offset: 1
-  - id: ours_skip_one
+  - id: skip_one
     adapter: vitfly_neural
     checkpoint: models/second_previous_frame/second_previous_frame_vitlstm_000099.pth
     frame_offset: 2

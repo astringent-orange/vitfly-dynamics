@@ -3,6 +3,17 @@
 [原项目主页](https://www.anishbhattacharya.com/research/vitfly) &nbsp;
 [原论文](https://arxiv.org/abs/2405.10391)
 
+## 目录
+
+- [Installation](#installation)
+- [Test (simulation)](#test-simulation)
+- [Gather your own dataset in simulation](#gather-your-own-dataset-in-simulation)
+- [Train](#train)
+- [Development and release](#development-and-release)
+- [Citation](#citation)
+- [Acknowledgements](#acknowledgements)
+- [Debugging tips](#debugging-tips)
+
 本项目基于 ICRA 2025 ViTFly，保留官方 ViT+LSTM 作为对比模型，并扩展为面向动态森林的行为克隆与统一 Benchmark。当前学习策略包括单帧、相邻双帧和隔一帧双帧三种输入；测试支持飞行速度、森林密度和动态障碍速度的可复现实验条件。
 
 仓库只保存代码和小型配置。Flightmare/Unity、森林场景、训练数据和模型权重属于大型资产，需要单独放置。
@@ -39,13 +50,13 @@ catkin config --cmake-args \
 
 #### 克隆代码
 
-在 `catkin_ws/src` 下将仓库目录命名为 `vitfly`：
+仓库需要放在 `catkin_ws/src` 下，但目录名没有强制要求。下面使用 Git 默认生成的 `vitfly-dynamics`：
 
 ```bash
 cd ~/catkin_ws/src
 git clone --branch code-release --single-branch \
-  git@github.com:astringent-orange/vitfly-dynamics.git vitfly
-cd vitfly
+  git@github.com:astringent-orange/vitfly-dynamics.git
+cd vitfly-dynamics
 ```
 
 如果使用已有副本：
@@ -102,13 +113,13 @@ models/
 从仓库根目录运行安装脚本，再回到 catkin 工作空间构建：
 
 ```bash
-cd ~/catkin_ws/src/vitfly
+cd ~/catkin_ws/src/vitfly-dynamics
 bash setup_ros.bash
 
 cd ~/catkin_ws
 catkin build
 source devel/setup.bash
-cd src/vitfly
+cd src/vitfly-dynamics
 ```
 
 为训练和 Python 节点创建环境。完整 ROS 仿真建议使用 Python 3.8；只在服务器训练时可使用与 PyTorch/CUDA 匹配的 Python 3.10：
@@ -129,11 +140,10 @@ pip install -r requirements.txt
 conda activate vitfly
 source /opt/ros/noetic/setup.bash
 source ~/catkin_ws/devel/setup.bash
-export FLIGHTMARE_PATH=~/catkin_ws/src/vitfly/flightmare
-cd ~/catkin_ws/src/vitfly
+cd ~/catkin_ws/src/vitfly-dynamics
 ```
 
-可将后三条环境命令加入 `~/.bashrc`。确认环境：
+使用 `launch_evaluation.bash` 从仓库根目录启动时，不需要手动设置 `FLIGHTMARE_PATH`；脚本会在该变量为空时自动使用当前仓库下的 `flightmare/`。只有绕过启动脚本、直接运行 Flightmare 工具时才需要自行设置。确认环境：
 
 ```bash
 python3 -c "import torch, cv2, yaml; print(torch.__version__, torch.cuda.is_available())"
@@ -142,16 +152,6 @@ test -x flightmare/flightrender/vitfly-unity.x86_64
 ```
 
 ## Test (simulation)
-
-#### 运行代码级测试
-
-这些测试不启动 Unity，用于检查模型输入、数据加载、场景生成、manifest、评价器和汇总逻辑：
-
-```bash
-python3 -m unittest discover -s training -p 'test_*.py' -v
-python3 -m unittest discover -s envtest/benchmark/tests -p 'test_*.py' -v
-PYTHONPATH=envtest/ros python3 -m unittest discover -s envtest/ros -p 'test_*.py' -v
-```
 
 #### 生成 Benchmark 场景和固定场次
 
@@ -212,7 +212,7 @@ bash launch_evaluation.bash 1 vision fixed_env \
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --policy ours_single \
+  --policy single \
   --scenario baseline \
   --limit 3 \
   --output results/dry_run \
@@ -229,7 +229,7 @@ column -s, -t results/dry_run/results.csv
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --policy ours_single \
+  --policy single \
   --scenario baseline \
   --limit 1 \
   --output results/checkpoint_smoke
@@ -246,10 +246,10 @@ column -s, -t results/checkpoint_smoke/results.csv
 三个新增 checkpoint 对应关系在 `envtest/benchmark/configs/forest_benchmark_v1.yaml` 中定义：
 
 ```text
-ours_single    -> models/current_frame/                 -> frame_offset 0
-ours_adjacent  -> models/previous_frame/                -> frame_offset 1
-ours_skip_one  -> models/second_previous_frame/         -> frame_offset 2
-original_vitfly -> models/ViTLSTM_model.pth             -> legacy offset 0
+single          -> models/current_frame/          -> frame_offset 0
+adjacent        -> models/previous_frame/         -> frame_offset 1
+skip_one        -> models/second_previous_frame/  -> frame_offset 2
+original_vitfly -> models/ViTLSTM_model.pth       -> legacy offset 0
 ```
 
 #### 运行三场 smoke test
@@ -260,7 +260,7 @@ original_vitfly -> models/ViTLSTM_model.pth             -> legacy offset 0
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --policy ours_single \
+  --policy single \
   --scenario baseline \
   --limit 3 \
   --output results/smoke_test \
@@ -277,9 +277,9 @@ python3 envtest/benchmark/run_benchmark.py \
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
-  --policy ours_single \
-  --policy ours_adjacent \
-  --policy ours_skip_one \
+  --policy single \
+  --policy adjacent \
+  --policy skip_one \
   --output results/forest_ablation_v1 \
   --resume
 
@@ -522,7 +522,7 @@ CUDA_VISIBLE_DEVICES=0 python3 training/train.py \
 清理 Flightlib 内的 Eigen CMake 缓存，再重新构建：
 
 ```bash
-cd ~/catkin_ws/src/vitfly/flightmare/flightlib/externals/eigen
+cd ~/catkin_ws/src/vitfly-dynamics/flightmare/flightlib/externals/eigen
 rm -rf CMakeCache.txt CMakeFiles
 cd ~/catkin_ws
 catkin clean

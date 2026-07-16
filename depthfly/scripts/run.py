@@ -21,7 +21,7 @@ import torch
 DEPTHFLY_PATH='/home/anish/vitfly_ws/src/vitfly/depthfly/'
 
 sys.path.append(DEPTHFLY_PATH+'../models')
-from model import *
+from model import CurrentFrameViTLSTM
 
 class DepthInferenceNode:
     def __init__(self):
@@ -34,7 +34,6 @@ class DepthInferenceNode:
         ### INITIALIZE MODEL
 
         self.desired_velocity = 4.0
-        self.model_type = 'ViTLSTM'
         self.model_path = '/home/anish/vitfly_ws/src/vitfly/models/ViTLSTM_model.pth'
 
         # define our model
@@ -42,19 +41,7 @@ class DepthInferenceNode:
 
             print(f"[DEPTHFLY RUN] Model loading from {self.model_path} ...")
             self.device = torch.device("cpu")
-            if self.model_type == 'LSTMNet':
-                self.model = LSTMNet().to(self.device).float()
-            elif self.model_type == 'UNetLSTM':
-                self.model = UNetConvLSTMNet().to(self.device).float()
-            elif self.model_type == 'ConvNet':
-                self.model = ConvNet().to(self.device).float()                
-            elif self.model_type == 'ViT':
-                self.model = ViT().to(self.device).float()
-            elif self.model_type == 'ViTLSTM':
-                self.model = LSTMNetVIT().to(self.device).float()                
-            else:
-                print(f'[DEPTHFLY RUN] Invalid self.model_type {self.model_type}. Exiting.')
-                exit()
+            self.model = CurrentFrameViTLSTM().to(self.device).float()
 
             # Give full path if possible since the bash script runs from outside the folder
             self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
@@ -123,10 +110,7 @@ class DepthInferenceNode:
         else:
             quad_att = None
 
-        if 'LSTM' in self.model_type:
-            inputs_to_model = [input_frame, desvel, quad_att, self.model_hidden_state]
-        else:
-            inputs_to_model = [input_frame, desvel, quad_att]
+        inputs_to_model = [input_frame, desvel, quad_att, self.model_hidden_state]
 
         # st_modelfwd_time = time.time()
         with torch.no_grad():

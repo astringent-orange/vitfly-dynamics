@@ -50,8 +50,6 @@ catkin config --cmake-args \
 
 #### 克隆代码
 
-仓库需要放在 `catkin_ws/src` 下，但目录名没有强制要求。下面使用 Git 默认生成的 `vitfly-dynamics`：
-
 ```bash
 cd ~/catkin_ws/src
 git clone --branch code-release --single-branch \
@@ -125,8 +123,8 @@ cd src/vitfly-dynamics
 为训练和 Python 节点创建环境。完整 ROS 仿真建议使用 Python 3.8；只在服务器训练时可使用与 PyTorch/CUDA 匹配的 Python 3.10：
 
 ```bash
-conda create -n vitfly python=3.8 pip -y
-conda activate vitfly
+conda create -n pubflight python=3.8 pip -y
+conda activate pubflight
 python -m pip install --upgrade pip
 
 # 先按服务器 CUDA 版本安装 PyTorch；下面仅为 CUDA 12.1 示例
@@ -137,7 +135,7 @@ pip install -r requirements.txt
 每次打开终端后执行：
 
 ```bash
-conda activate vitfly
+conda activate pubflight
 source /opt/ros/noetic/setup.bash
 source ~/catkin_ws/devel/setup.bash
 cd ~/catkin_ws/src/vitfly-dynamics
@@ -166,30 +164,42 @@ python3 envtest/benchmark/build_manifest.py \
   --output envtest/benchmark/manifests
 ```
 
-生成结果位于：
+#### 完整的单模型测试命令
 
-```text
-flightmare/flightpy/configs/vision/forest_benchmark_v1/
-envtest/benchmark/manifests/ablation_validation_cases.csv
-envtest/benchmark/manifests/comparison_test_cases.csv
-envtest/benchmark/manifests/scene_manifest.csv
-```
-
-#### 手动运行一次视觉策略
-
-与原版代码相同，`launch_evaluation.bash` 会启动 Flightmare、评价节点和视觉控制器。当前版本不再隐式选择 checkpoint，必须同时给出输入 offset 和权重路径：
+下面的命令在固定森林场景中，以5m/s运行相邻双帧模型3场，并将评价结果写入指定文件：
 
 ```bash
 VITFLY_ENV_LEVEL=forest_benchmark_v1 \
 VITFLY_ENV_FOLDER=map_010_density_medium_dynamic_collection \
 VITFLY_DYNAMIC_PHASE_SEED=9000 \
 VITFLY_DES_VEL=5 \
-bash launch_evaluation.bash 1 vision fixed_env \
-  offset=0 \
-  model_path=models/current_frame/current_frame_vitlstm_000099.pth
+bash launch_evaluation.bash 3 vision fixed_env \
+  offset=1 \
+  result_path=results/manual_adjacent/evaluation.yaml
 ```
 
-其中第一个参数是 rollout 数量，`vision` 表示运行视觉模型，`fixed_env` 表示所有 rollout 使用指定场景。运行结果默认写入根目录的 `evaluation.yaml`；`/debug_img1` topic 可用于查看带预测速度箭头的深度图。
+参数说明：
+
+- `VITFLY_ENV_LEVEL`：场景集合，本实验使用 `forest_benchmark_v1`。
+- `VITFLY_ENV_FOLDER`：具体场景目录。
+- `VITFLY_DYNAMIC_PHASE_SEED`：动态障碍物初始 phase seed。
+- `VITFLY_DES_VEL`：目标飞行速度，单位为m/s。
+- `3`：连续运行的 rollout 数量。
+- `vision`：使用视觉模型；采集 expert 数据时使用 `state`。
+- `fixed_env`：所有 rollout 使用同一场景；省略时 state 模式会依次切换环境。
+- `offset=0/1/2`：选择单帧、相邻双帧或隔一帧双帧输入。
+- `result_path`：本次评价 YAML 的保存路径。
+- 可选的 `rviz`：在命令末尾添加以打开可视化。
+
+`offset` 会自动选择默认 checkpoint：
+
+```text
+offset=0 -> models/current_frame/current_frame_vitlstm_000099.pth
+offset=1 -> models/previous_frame/previous_frame_vitlstm_000099.pth
+offset=2 -> models/second_previous_frame/second_previous_frame_vitlstm_000099.pth
+```
+
+如需测试其他 checkpoint，可增加 `model_path=/path/to/model.pth` 覆盖默认值。`/debug_img1` topic 可用于查看带预测速度箭头的深度图。
 
 手动运行官方旧权重时需要显式允许 legacy checkpoint：
 
@@ -203,23 +213,6 @@ bash launch_evaluation.bash 1 vision fixed_env \
 ```
 
 正式实验应使用下述 Benchmark runner，而不是手动反复修改环境变量。
-
-#### 检查命令和 checkpoint 配置
-
-`--dry-run` 检查场景、policy 和启动命令，但不启动 ROS。必须使用独立的临时结果目录；不要把 dry-run 结果和正式结果混在一起：
-
-```bash
-python3 envtest/benchmark/run_benchmark.py \
-  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
-  --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --policy single \
-  --scenario baseline \
-  --limit 3 \
-  --output results/dry_run \
-  --dry-run
-
-column -s, -t results/dry_run/results.csv
-```
 
 #### 运行一个真实加载测试
 
@@ -243,7 +236,7 @@ column -s, -t results/checkpoint_smoke/results.csv
 --policy original_vitfly
 ```
 
-三个新增 checkpoint 对应关系在 `envtest/benchmark/configs/forest_benchmark_v1.yaml` 中定义：
+Benchmark 中的模型名称在 `envtest/benchmark/configs/forest_benchmark_v1.yaml` 中定义：
 
 ```text
 single          -> models/current_frame/          -> frame_offset 0
@@ -253,8 +246,6 @@ original_vitfly -> models/ViTLSTM_model.pth       -> legacy offset 0
 ```
 
 #### 运行三场 smoke test
-
-真实 smoke test 不要添加 `--dry-run`：
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \

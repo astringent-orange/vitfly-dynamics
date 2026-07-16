@@ -75,6 +75,26 @@ PLANNER_FIELDS = [
     "candidate_predicted_stop_distance",
 ]
 
+REPOSITORY_ROOT = os.path.abspath(opj(os.path.dirname(__file__), "..", ".."))
+DEFAULT_MODEL_PATHS = {
+    0: opj(REPOSITORY_ROOT, "models", "current_frame", "current_frame_vitlstm_000099.pth"),
+    1: opj(REPOSITORY_ROOT, "models", "previous_frame", "previous_frame_vitlstm_000099.pth"),
+    2: opj(REPOSITORY_ROOT, "models", "second_previous_frame", "second_previous_frame_vitlstm_000099.pth"),
+}
+
+
+def resolve_model_path(offset, model_path=None):
+    """Return an explicit checkpoint or the repository default for an offset."""
+    offset = int(offset)
+    if offset not in DEFAULT_MODEL_PATHS:
+        raise ValueError(f"unsupported frame offset: {offset}")
+    if model_path:
+        expanded = os.path.expanduser(model_path)
+        if not os.path.isabs(expanded):
+            expanded = opj(REPOSITORY_ROOT, expanded)
+        return os.path.abspath(expanded)
+    return DEFAULT_MODEL_PATHS[offset]
+
 
 class AgilePilotNode:
     def __init__(self, vision_based=False, offset=0, model_path=None, desVel=None, keyboard=False):
@@ -161,8 +181,8 @@ class AgilePilotNode:
 
         self.frame_offset = int(offset)
         self.model_type, self.num_input_frames, self.checkpoint_prefix = frame_mode_spec(self.frame_offset)
-        if self.vision_based and not model_path:
-            raise ValueError('[RUN_COMPETITION] vision-based inference requires --model_path')
+        if self.vision_based:
+            model_path = resolve_model_path(self.frame_offset, model_path)
 
         self.state_expert = None
         if not self.vision_based and not self.keyboard:
@@ -708,7 +728,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agile Pilot.")
     parser.add_argument("--vision_based", help="Fly vision-based", required=False, dest="vision_based", action="store_true")
     parser.add_argument('--offset', type=int, choices=(0, 1, 2), default=0, help='frame mode: 0=current, 1=previous, 2=second previous')
-    parser.add_argument('--model_path', type=str, default=None, help='absolute path to model checkpoint')
+    parser.add_argument('--model_path', type=str, default=None, help='optional checkpoint path; defaults from --offset')
     parser.add_argument('--des_vel', type=float, default=None, help='desired velocity for quadrotor')
     parser.add_argument('--benchmark-mode', action='store_true', help='isolate benchmark rollout logging from train_set')
     parser.add_argument('--policy-config', type=str, default=None, help='optional benchmark policy YAML (metadata only)')

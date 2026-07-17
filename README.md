@@ -9,6 +9,8 @@
 
 - [Installation](#installation)
 - [Test (simulation)](#test-simulation)
+  - [Ablation experiment](#ablation-experiment)
+  - [Comparison experiment](#comparison-experiment)
 - [Gather dataset](#gather-dataset)
 - [Train](#train)
 - [Citation](#citation)
@@ -110,7 +112,9 @@ cd ~/catkin_ws/src/vitfly-dynamics
 
 正式测试按以下步骤执行。
 
-### 1. 生成森林场景和固定 manifest
+### Common preparation
+
+#### 1. 生成森林场景和固定 manifest
 
 该步骤要求 `trees/environment_0..19` 已放置完成：
 
@@ -125,7 +129,7 @@ python3 envtest/benchmark/build_manifest.py \
 
 Manifest 是冻结的 CSV 测试清单，每行代表一个 rollout case，并记录场景、地图、phase seed、飞行速度、森林密度和动态障碍条件。不同模型复用相同 case，保证结果可复现且能够配对比较。
 
-### 2. 确认模型配置
+#### 2. 确认模型配置
 
 模型名称和权重在 `envtest/benchmark/configs/forest_benchmark_v1.yaml` 中定义：
 
@@ -138,7 +142,7 @@ original_vitfly -> models/ViTLSTM_model.pth
 
 直接使用 `launch_evaluation.bash` 时，`offset=0/1/2` 会依次选择前三个默认 checkpoint；显式传入 `model_path=...` 可覆盖默认值。Benchmark runner 根据 policy 配置选择模型，不需要单独传 offset。
 
-### 3. 运行最简单的视觉测试
+#### 3. 运行最简单的视觉测试
 
 ```bash
 VITFLY_ENV_LEVEL=forest_benchmark_v1 \
@@ -148,7 +152,7 @@ bash launch_evaluation.bash 1 vision fixed_env offset=0
 
 该命令在一张已生成的森林场景中运行一次单帧模型，结果写入 `evaluation.yaml`。将 `offset` 改为 `1` 或 `2` 可切换另外两种输入模型。
 
-### 4. 运行消融实验
+### Ablation experiment
 
 该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型。采用单变量扫描：每次只改变一个因素，另外两个因素保持基准值。
 
@@ -242,7 +246,7 @@ ablation_flight_speed.png
 
 汇总脚本不自动排序或选择模型。结合 `summary.csv`、`paired_model_differences.csv` 和三张图，人工决定用于主对比实验的模型。
 
-### 5. 运行主对比实验
+### Comparison experiment
 
 该实验在未参与消融的 test maps 上比较人工选出的最优模型、官方ViTFly、FastPlanner和EGO-Planner。仍采用动态障碍速度、森林密度和无人机速度三个单因素扫描，共用同一个baseline：
 
@@ -253,38 +257,35 @@ ablation_flight_speed.png
 
 每次命令只测试一个模型。主对比默认使用森林Benchmark配置和 `comparison_test_cases.csv`，结果自动写入 `results/comparation/<model>_YYYYMMDD_HHMMSS/`。
 
-人工选择的最优模型需要通过 `--best-policy` 指定：
+人工选择的最优模型直接通过 `--policy` 指定：
 
 ```bash
-python3 envtest/benchmark/run_comparison.py \
-  --model best \
-  --best-policy adjacent
+python3 envtest/benchmark/run_comparison.py --policy adjacent
 ```
 
-`--best-policy` 可选 `single`、`adjacent` 或 `skip_one`。结果中统一显示为 `best_ours`，同时在每行记录实际的 `source_policy_id`、frame offset和checkpoint hash。
+当 `--policy` 为 `single`、`adjacent` 或 `skip_one` 时，表示人工选中的最优模型。结果中统一显示为 `best_ours`，同时在每行记录实际的 `source_policy_id`、frame offset和checkpoint hash。
 
 官方ViTFly：
 
 ```bash
-python3 envtest/benchmark/run_comparison.py --model vitfly
+python3 envtest/benchmark/run_comparison.py --policy vitfly
 ```
 
 规划器接入后分别运行：
 
 ```bash
-python3 envtest/benchmark/run_comparison.py --model fastplanner
+python3 envtest/benchmark/run_comparison.py --policy fastplanner
 ```
 
 ```bash
-python3 envtest/benchmark/run_comparison.py --model egoplanner
+python3 envtest/benchmark/run_comparison.py --policy egoplanner
 ```
 
 恢复中断实验时，显式传入原来的结果目录：
 
 ```bash
 python3 envtest/benchmark/run_comparison.py \
-  --model best \
-  --best-policy adjacent \
+  --policy adjacent \
   --output results/comparation/best_ours_20260717_163000 \
   --resume
 ```

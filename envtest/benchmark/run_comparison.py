@@ -16,25 +16,22 @@ except ImportError:
 DEFAULT_CONFIG = ROOT / "envtest" / "benchmark" / "configs" / "forest_benchmark_v1.yaml"
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "comparison_test_cases.csv"
 DEFAULT_OUTPUT_ROOT = ROOT / "results" / "comparation"
-MODEL_CHOICES = ("best", "vitfly", "fastplanner", "egoplanner")
+POLICY_CHOICES = ("single", "adjacent", "skip_one", "vitfly", "fastplanner", "egoplanner")
 
 
-def resolve_model(cfg, model, best_policy=None):
-    """Return (source policy id, stable result id) for one comparison model."""
+def resolve_policy(cfg, requested_policy):
+    """Return (source policy id, stable result id) for one comparison policy."""
     comparison = cfg.get("design", {}).get("comparison_models", {})
-    if model not in comparison:
-        raise ValueError(f"comparison model is not configured: {model}")
-    spec = comparison[model]
-    if model == "best":
-        candidates = tuple(spec.get("candidates", ()))
-        if best_policy not in candidates:
-            choices = ", ".join(candidates)
-            raise ValueError(f"--best-policy must be one of: {choices}")
-        source_policy = best_policy
+    best = comparison.get("best", {})
+    if requested_policy in tuple(best.get("candidates", ())):
+        source_policy = requested_policy
+        result_id = best["result_id"]
     else:
-        if best_policy is not None:
-            raise ValueError("--best-policy is valid only with --model best")
+        if requested_policy not in comparison:
+            raise ValueError(f"comparison policy is not configured: {requested_policy}")
+        spec = comparison[requested_policy]
         source_policy = spec["source_policy"]
+        result_id = spec["result_id"]
 
     policies = policy_index(cfg.get("policies", []))
     if source_policy not in policies:
@@ -42,9 +39,9 @@ def resolve_model(cfg, model, best_policy=None):
     policy = policies[source_policy]
     if policy["adapter"] in PLANNER_ADAPTERS and not policy.get("enabled", False):
         raise ValueError(
-            f"{model} is not integrated: configure its ROS adapter and set enabled: true"
+            f"{requested_policy} is not integrated: configure its ROS adapter and set enabled: true"
         )
-    return source_policy, spec["result_id"]
+    return source_policy, result_id
 
 
 def default_output_path(result_id, now=None):
@@ -57,8 +54,7 @@ def build_parser():
         description=__doc__,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--model", required=True, choices=MODEL_CHOICES)
-    parser.add_argument("--best-policy", choices=("single", "adjacent", "skip_one"))
+    parser.add_argument("--policy", required=True, choices=POLICY_CHOICES)
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="Benchmark configuration")
     parser.add_argument("--cases", default=DEFAULT_CASES, help="Immutable comparison manifest")
     parser.add_argument("--scenario", action="append", default=[])
@@ -75,7 +71,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     cfg = normalize_policy_paths(load(args.config))
     try:
-        source_policy, result_id = resolve_model(cfg, args.model, args.best_policy)
+        source_policy, result_id = resolve_policy(cfg, args.policy)
     except ValueError as error:
         parser.error(str(error))
 

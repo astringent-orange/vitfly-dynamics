@@ -9,7 +9,7 @@ from envtest.benchmark.run_comparison import (
     DEFAULT_OUTPUT_ROOT,
     build_parser,
     default_output_path,
-    resolve_model,
+    resolve_policy,
 )
 from envtest.benchmark.run_benchmark import load
 
@@ -20,25 +20,24 @@ class ComparisonRunnerTest(unittest.TestCase):
         cls.config = normalize_policy_paths(load(DEFAULT_CONFIG))
 
     def test_defaults_use_main_comparison_manifest(self):
-        args = build_parser().parse_args(["--model", "vitfly"])
+        args = build_parser().parse_args(["--policy", "vitfly"])
         self.assertEqual(args.config, DEFAULT_CONFIG)
         self.assertEqual(args.cases, DEFAULT_CASES)
         self.assertIn("source_policy_id", RESULT_FIELDS)
         self.assertIn("adapter", RESULT_FIELDS)
         self.assertIn("frame_offset", RESULT_FIELDS)
 
-    def test_best_model_requires_and_preserves_manual_selection(self):
-        self.assertEqual(resolve_model(self.config, "best", "adjacent"), ("adjacent", "best_ours"))
-        with self.assertRaisesRegex(ValueError, "--best-policy"):
-            resolve_model(self.config, "best")
+    def test_best_model_uses_one_manual_policy_parameter(self):
+        for policy in ("single", "adjacent", "skip_one"):
+            self.assertEqual(resolve_policy(self.config, policy), (policy, "best_ours"))
 
     def test_vitfly_maps_to_official_legacy_policy(self):
-        self.assertEqual(resolve_model(self.config, "vitfly"), ("original_vitfly", "vitfly"))
+        self.assertEqual(resolve_policy(self.config, "vitfly"), ("original_vitfly", "vitfly"))
 
     def test_unintegrated_planners_fail_before_rollout(self):
         for model in ("fastplanner", "egoplanner"):
             with self.assertRaisesRegex(ValueError, "is not integrated"):
-                resolve_model(self.config, model)
+                resolve_policy(self.config, model)
 
     def test_planner_command_contract_is_validated(self):
         valid = validate_policy({

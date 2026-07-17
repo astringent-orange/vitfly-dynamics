@@ -1,25 +1,19 @@
 import os
-import re
-import sys
 import yaml
 import rospy
 import numpy as np
 
-from dodgeros_msgs.msg import Command, QuadState
+from dodgeros_msgs.msg import QuadState
 from envsim_msgs.msg import ObstacleArray
 from std_msgs.msg import Empty
 
 from uniplot import plot
-import pandas as pd
-import matplotlib.pyplot as plt
 
 
 class Evaluator:
-    def __init__(self, config, exp_name):
+    def __init__(self, config):
         rospy.init_node("evaluator", anonymous=False)
         self.config = config
-
-        self.exp_name = exp_name
 
         self.xmax = int(float(os.environ.get("VITFLY_EVAL_GOAL_X", self.config["target"])))
 
@@ -42,7 +36,6 @@ class Evaluator:
         self._initSubscribers(config["topics"])
         self._initPublishers(config["topics"])
 
-        self.ctr = 0
         self.start_time_mark = False
         self.goal_reached = False
         self.termination_reason = None
@@ -82,7 +75,6 @@ class Evaluator:
 
     def publishFinish(self):
         self.finish_pub.publish()
-        self.writeSummary()
         self.printSummary()
 
     def callbackState(self, msg):
@@ -93,10 +85,6 @@ class Evaluator:
         if self.pos_x > self.start_x and not self.start_time_mark:
             self.time_array[0] = rospy.get_rostime().to_sec()
             self.start_time_mark = True
-
-        # self.ctr += 1
-        # if self.ctr % 30 != 0:
-        #     print(f'[evaluator] self.is_active={self.is_active} ; self.time_array[0]={self.time_array[0]:.3f}')
 
         if not self.is_active:
             return
@@ -173,76 +161,6 @@ class Evaluator:
                 yaml.safe_dump(summary, f)
         rospy.signal_shutdown("Completed Evaluation")
 
-    def writeSummary(self):
-        """
-        - second was logging the whole path.
-        """
-        return 
-        #Time taken throughout the run
-        self.timeTaken = self.time_array[-1] - self.time_array[0]
-
-        #Obstacles Collided - just to keep track 
-        self.crash = self.crash
-
-        #Distance from nearest obstacles
-        dist = np.array(self.dist) #-> time, distance
-
-        #Whole path
-        pos = np.array(self.pos) #-> time, x,y,z
-
-        #Since the size of position and nearest obstacle is different, we can't append to same df
-        #We also shouldn't interpolate -> can harm the data
-        #Saving to two different csv because one's frequency is double than other
-
-        exp_dir = os.path.join("../../labutils/stored_metrics", self.exp_name)
-        os.mkdir(exp_dir)
-
-        #XYZ Path File
-        # print(pos)
-        # print(pos.shape)
-        pathFile = os.path.join(exp_dir,"path.csv")
-        pd.DataFrame(pos).to_csv(pathFile)
-
-        pathPlots = os.path.join(exp_dir,"XYZ Plots.png")
-        _, axs = plt.subplots(3, 1, figsize=(16, 20))
-        pos = pos.T
-        axs[0].plot(pos[1],pos[2])
-        axs[0].set_xlabel("X [m]")
-        axs[0].set_ylabel("Y [m]")
-        axs[0].set_title("TOP-DOWN; XY")
-
-        axs[1].plot(pos[2], pos[3])
-        axs[1].set_xlabel("Y [m]")
-        axs[1].set_ylabel("Z [m]")
-        axs[1].set_title("HEAD-ON; YZ")
-        axs[1].invert_xaxis()
-        
-        axs[2].plot(pos[1], pos[3])
-        axs[2].set_xlabel("X [m]")
-        axs[2].set_ylabel("Z [m]")
-        axs[2].set_title("SIDE-VIEW; ZX")
-
-        plt.savefig(pathPlots)
-
-        #Distance to Obstacle File
-        distFile = os.path.join(exp_dir,"dist.csv")
-        nearestDistPlots = os.path.join(exp_dir,"nearestDist.png")
-        pd.DataFrame(dist).to_csv(distFile)
-        plt.figure()
-        plt.plot(dist[:, 0] - self.time_array[0],dist[:, 1])
-        plt.xlabel("time (s)");plt.ylabel("Distance from Obstacles [m]")
-        plt.savefig(nearestDistPlots)
-
-        # save trainset folder name so more stats can be extracted later
-        subdirs = sorted(os.listdir('/home/dhruv/icra22_competition_ws/src/agile_flight/envtest/ros/train_set'))
-        stats_dir = subdirs[-1]
-
-        #Time Taken and num collisions Dat File
-        Scalarfile = os.path.join(exp_dir,"scalarMetrics.dat")
-        with open(Scalarfile, "a") as file:
-            file.write(str( float(self.timeTaken) ) + ", " + str(int(self.crash)) + ", " + stats_dir + "\n")
-
-
     def printSummary(self):
         
         ttf = self.time_array[-1] - self.time_array[0]
@@ -295,10 +213,5 @@ class Evaluator:
 if __name__ == "__main__":
     with open("./evaluation_config.yaml") as f:
         config = yaml.safe_load(f)
-    
-    # experiment name is passed in as argument in batched rollouts,
-    # otherwise it is the current datetime
-    from datetime import datetime
-    exp_name = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('d%m_%d_t%H_%M')
-    Evaluator(config, exp_name)
+    Evaluator(config)
     rospy.spin()

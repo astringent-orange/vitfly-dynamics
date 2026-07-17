@@ -4,7 +4,6 @@
 import argparse
 import csv
 import hashlib
-import json
 import os
 import signal
 import shutil
@@ -79,7 +78,7 @@ def hash_scene(path):
     return digest.hexdigest()
 
 
-def validate_case_scene(case, cfg):
+def validate_case_scene(case):
     """Refuse to run a case if its frozen scene was changed or removed."""
     scene_root = ROOT / "flightmare" / "flightpy" / "configs" / "vision"
     scene = scene_root / case["scene_path"]
@@ -202,19 +201,17 @@ def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):
             "flight_time": "", "termination_elapsed_time": "", "termination_reason": "timeout",
             "runner_returncode": 124,
         }
-    completed = subprocess.CompletedProcess(command, returncode)
     summary = evaluation_result(evaluation_path)
     if summary is None:
         summary = {
             "goal_reached": 0, "success": 0, "collision": 0, "collision_count": 0,
             "flight_time": "", "termination_elapsed_time": "",
-            "termination_reason": "controller_error" if completed.returncode else "missing_result",
+            "termination_reason": "controller_error" if returncode else "missing_result",
         }
-    elif completed.returncode != 0:
+    elif returncode != 0:
         summary["success"] = 0
         summary["termination_reason"] = "controller_error"
-    summary["runner_returncode"] = completed.returncode
-    summary["evaluation_yaml"] = str(evaluation_path)
+    summary["runner_returncode"] = returncode
     return summary
 
 
@@ -264,7 +261,7 @@ def main(argv=None):
     if not cases:
         raise ValueError("case manifest selection is empty")
     for case in cases:
-        validate_case_scene(case, cfg)
+        validate_case_scene(case)
     output.mkdir(parents=True, exist_ok=True)
     if used_default_output:
         print(f"[BENCHMARK] default output: {output}")

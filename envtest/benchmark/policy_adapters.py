@@ -7,7 +7,6 @@ can be added without changing the case manifest or result schema.
 """
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Any, Dict, Protocol
 

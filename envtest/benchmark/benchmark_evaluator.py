@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Deterministic rollout evaluation rules shared by ROS and offline tests."""
+"""Deterministic rollout evaluation reference used by offline tests."""
 
 from dataclasses import dataclass
-import math
 
 
 @dataclass(frozen=True)

@@ -24,8 +24,18 @@ class ManifestTest(unittest.TestCase):
             return list(csv.DictReader(stream))
 
     def test_expected_case_counts(self):
-        self.assertEqual(len(self.read("ablation_validation_cases.csv")), 350)
-        self.assertEqual(len(self.read("comparison_test_cases.csv")), 350)
+        self.assertEqual(len(self.read("ablation_validation_cases.csv")), 140)
+        self.assertEqual(len(self.read("comparison_test_cases.csv")), 140)
+
+    def test_each_split_uses_two_phase_seeds(self):
+        self.assertEqual(
+            {row["phase_seed"] for row in self.read("ablation_validation_cases.csv")},
+            {"8000", "8001"},
+        )
+        self.assertEqual(
+            {row["phase_seed"] for row in self.read("comparison_test_cases.csv")},
+            {"9000", "9001"},
+        )
 
     def test_case_ids_and_pairing_are_unique(self):
         for name in ("ablation_validation_cases.csv", "comparison_test_cases.csv"):
@@ -33,8 +43,8 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(len({row["case_id"] for row in rows}), len(rows))
             counts = Counter(row["scenario_id"] for row in rows)
             self.assertEqual(set(counts), self.SCENARIOS)
-            self.assertEqual(set(counts.values()), {50})
-            self.assertEqual(counts["baseline"], 50)
+            self.assertEqual(set(counts.values()), {20})
+            self.assertEqual(counts["baseline"], 20)
 
     def test_each_scenario_changes_only_one_baseline_factor(self):
         rows = self.read("ablation_validation_cases.csv")

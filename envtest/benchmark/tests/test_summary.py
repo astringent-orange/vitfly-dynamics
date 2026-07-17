@@ -26,10 +26,10 @@ class SummaryTest(unittest.TestCase):
                 rows.append({
                     "policy_id": policy,
                     "scenario_id": scenario,
-                    "total": 50,
-                    "success_count": round(success_rate * 50),
+                    "total": 20,
+                    "success_count": round(success_rate * 20),
                     "success_rate": success_rate,
-                    "collision_count": round((1.0 - success_rate) * 50),
+                    "collision_count": round((1.0 - success_rate) * 20),
                     "collision_rate": 1.0 - success_rate,
                     "successful_time_mean": 12.0 + scenario_index,
                     "successful_time_median": 11.5 + scenario_index,

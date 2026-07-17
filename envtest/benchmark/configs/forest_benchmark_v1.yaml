@@ -27,8 +27,8 @@ scenario:
     validation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     test: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
   phase_seeds:
-    validation: [8000, 8001, 8002, 8003, 8004]
-    test: [9000, 9001, 9002, 9003, 9004]
+    validation: [8000, 8001]
+    test: [9000, 9001]
   desired_speeds: [3.0, 5.0, 7.0]
   density_counts:
     low: 50

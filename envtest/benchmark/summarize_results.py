@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Summarize benchmark results and optionally select the ablation winner."""
+"""Summarize benchmark results for manual model comparison."""
 
 import argparse
 import csv
 import json
-import math
 import random
 from pathlib import Path
-
-import yaml
-
 
 SUMMARY_FIELDS = [
     "policy_id", "scenario_id", "total", "success_count", "success_rate",
@@ -30,7 +26,7 @@ def read_csv(path):
 
 def write_csv(path, fields, rows):
     with open(path, "w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -148,45 +144,10 @@ def plot_summaries(summaries, output):
         plt.close(fig)
 
 
-def select_best(summaries, result_dir):
-    policies = {}
-    policy_file = result_dir / "policies.yaml"
-    if policy_file.is_file():
-        with open(policy_file) as stream:
-            raw = yaml.safe_load(stream) or []
-        policies = {item["id"]: item for item in raw}
-    by_policy = {}
-    for row in summaries:
-        by_policy.setdefault(row["policy_id"], {})[row["scenario_id"]] = row
-    baseline = next((policy for policy in by_policy if "single" in policy), None)
-    baseline_static = by_policy.get(baseline, {}).get("dynamic_off", {}).get("success_rate", 0.0) if baseline else 0.0
-    candidates = []
-    for policy, groups in by_policy.items():
-        dynamic = [groups[name] for name in ("dynamic_collection", "dynamic_high") if name in groups]
-        if not dynamic:
-            continue
-        static_rate = float(groups.get("dynamic_off", {}).get("success_rate", baseline_static))
-        if "single" not in policy and static_rate < float(baseline_static) - 0.05:
-            continue
-        score = sum(float(row["success_rate"]) for row in dynamic) / len(dynamic)
-        collision = sum(float(row["collision_rate"]) for row in dynamic) / len(dynamic)
-        times = [float(row["successful_time_median"]) for row in dynamic if row["successful_time_median"] not in ("", None)]
-        candidates.append((score, -collision, -(sum(times) / len(times) if times else float("inf")), policy))
-    if not candidates:
-        raise ValueError("no eligible policy for selection")
-    winner = max(candidates)[-1]
-    selected = policies.get(winner, {"id": winner})
-    with open(result_dir / "selected_policy.yaml", "w") as stream:
-        yaml.safe_dump({"policy": selected, "selection_rule": "dynamic success, collision, time"}, stream, sort_keys=False)
-    print(f"[SUMMARY] selected policy={winner}")
-    return winner
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--select-best", action="store_true")
     args = parser.parse_args()
     result_path = Path(args.results)
     output = Path(args.output)
@@ -199,8 +160,6 @@ def main():
     with open(output / "summary.json", "w") as stream:
         json.dump({"rows": summaries, "paired_model_differences": paired, "source": str(result_path)}, stream, indent=2)
     plot_summaries(summaries, output)
-    if args.select_best:
-        select_best(summaries, output)
     print(f"[SUMMARY] wrote {output / 'summary.csv'} groups={len(summaries)}")
 
 

@@ -14,14 +14,14 @@ from pathlib import Path
 
 import yaml
 
-from policy_adapters import policy_environment, policy_index, validate_policy
+from policy_adapters import policy_environment, policy_index
 
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULT_FIELDS = [
     "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
-    "dynamic_speed_multiplier", "phase_seed", "goal_reached", "success", "collision",
+    "dynamic_speed_mps", "phase_seed", "goal_reached", "success", "collision",
     "collision_count", "flight_time", "termination_elapsed_time", "termination_reason",
     "runner_returncode", "completed_at_utc",
 ]
@@ -41,7 +41,7 @@ def write_csv(path, fields, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     with open(temporary, "w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
         stream.flush()
@@ -103,14 +103,9 @@ def evaluation_result(path):
     }
 
 
-def select_policies(cfg, requested, selected_path=None):
+def select_policies(cfg, requested):
     policies = policy_index(cfg.get("policies", []))
     selected = []
-    if selected_path:
-        selected_policy = load(selected_path)
-        if "policy" in selected_policy:
-            selected_policy = selected_policy["policy"]
-        selected.append(validate_policy(selected_policy))
     for policy_id in requested:
         if policy_id not in policies:
             raise ValueError(f"unknown policy id: {policy_id}")
@@ -197,7 +192,6 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--cases", required=True)
     parser.add_argument("--policy", action="append", default=[])
-    parser.add_argument("--selected-policy")
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", required=True)
@@ -207,7 +201,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load(args.config)
-    policies = select_policies(cfg, args.policy, args.selected_policy)
+    policies = select_policies(cfg, args.policy)
     cases = read_csv(args.cases)
     if args.scenario:
         cases = [case for case in cases if case["scenario_id"] in set(args.scenario)]
@@ -249,11 +243,11 @@ def main():
                 "scenario_id": case["scenario_id"], "map_id": case["map_id"],
                 "desired_speed": case["desired_speed"], "forest_density": case["forest_density"],
                 "tree_count": case["tree_count"], "dynamic_profile": case["dynamic_profile"],
-                "dynamic_speed_multiplier": case["dynamic_speed_multiplier"], "phase_seed": case["phase_seed"],
+                "dynamic_speed_mps": case["dynamic_speed_mps"], "phase_seed": case["phase_seed"],
                 **{field: result.get(field, "") for field in RESULT_FIELDS if field not in {
                     "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
                     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
-                    "dynamic_speed_multiplier", "phase_seed", "completed_at_utc",
+                    "dynamic_speed_mps", "phase_seed", "completed_at_utc",
                 }},
                 "completed_at_utc": now,
             }

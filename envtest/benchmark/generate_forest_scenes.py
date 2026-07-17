@@ -3,8 +3,8 @@
 
 The generator keeps the medium map byte-for-byte identical to the source map,
 derives low density by deterministic sub-sampling, and adds deterministic tree
-rows for high density.  Dynamic obstacle geometry is shared by all profiles;
-the high profile only scales trajectory time.
+rows for high density. Dynamic obstacle geometry is shared by all speed
+profiles; only the trajectory time scale changes.
 """
 
 import argparse
@@ -25,16 +25,23 @@ sys.path.insert(0, str(ROS_DIR))
 from astar_planner import StaticAStarPlanner, write_path_csv  # noqa: E402
 
 
-PROFILES = {
-    "dynamic_off": (False, 1.0),
-    "dynamic_collection": (True, 1.0),
-    "dynamic_high": (True, 1.5),
-}
-
-
 def load_config(path):
     with open(path) as stream:
         return yaml.safe_load(stream) or {}
+
+
+def dynamic_profiles(cfg):
+    profiles = cfg.get("scenario", {}).get("dynamic", {}).get("profiles", {})
+    if not profiles:
+        raise ValueError("scenario.dynamic.profiles must define dynamic obstacle speeds")
+    checked = {}
+    for name, values in profiles.items():
+        speed = float(values["nominal_speed_mps"])
+        multiplier = float(values["speed_multiplier"])
+        if speed <= 0.0 or multiplier <= 0.0:
+            raise ValueError(f"dynamic profile {name} must have positive speed")
+        checked[name] = {"nominal_speed_mps": speed, "speed_multiplier": multiplier}
+    return checked
 
 
 def source_rows(path):
@@ -112,12 +119,9 @@ def make_static_rows(source, density, target, cfg, map_id, attempt=0):
 
 
 def write_dynamic_assets(scene_dir, map_id, cfg, profile):
-    enabled, multiplier = PROFILES[profile]
-    if not enabled:
-        (scene_dir / "dynamic_obstacles.yaml").write_text("N: 0\n")
-        return
-
     dynamic_cfg = cfg["scenario"]["dynamic"]
+    profile_cfg = dynamic_profiles(cfg)[profile]
+    multiplier = profile_cfg["speed_multiplier"]
     count = int(dynamic_cfg.get("count", 8))
     periods = dynamic_cfg.get("medium_period_seconds", [6.0, 10.0])
     # Keep positions, directions and scales identical across dynamic profiles;
@@ -179,13 +183,14 @@ def generate(config_path, map_ids=None, overwrite=False):
     cfg = load_config(config_path)
     source_root = ROOT / "flightmare" / "flightpy" / "configs" / "vision" / cfg.get("source_level", "trees")
     output_root = ROOT / "flightmare" / "flightpy" / "configs" / "vision" / cfg.get("output_level", "forest_benchmark_v1")
+    profiles = dynamic_profiles(cfg)
     map_ids = list(map_ids if map_ids is not None else sorted(set(cfg["scenario"]["map_ids"]["validation"] + cfg["scenario"]["map_ids"]["test"])))
     for map_id in map_ids:
         source_dir = source_root / f"environment_{map_id}"
         source_file = source_dir / "static_obstacles.csv"
         source = source_rows(source_file)
         for density, target in cfg["scenario"]["density_counts"].items():
-            for profile in PROFILES:
+            for profile, profile_cfg in profiles.items():
                 scene_id = f"map_{map_id:03d}_density_{density}_{profile}"
                 scene_dir = output_root / scene_id
                 if scene_dir.exists():
@@ -219,6 +224,8 @@ def generate(config_path, map_ids=None, overwrite=False):
                         "density": density,
                         "tree_count": len(rows),
                         "dynamic_profile": profile,
+                        "dynamic_speed_mps": profile_cfg["nominal_speed_mps"],
+                        "dynamic_speed_multiplier": profile_cfg["speed_multiplier"],
                         "source_map": f"environment_{map_id}",
                         "generator_config": str(config_path),
                     }, sort_keys=True))

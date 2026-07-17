@@ -142,15 +142,29 @@ original_vitfly -> models/ViTLSTM_model.pth
 
 ```bash
 VITFLY_ENV_LEVEL=forest_benchmark_v1 \
-VITFLY_ENV_FOLDER=map_010_density_medium_dynamic_collection \
+VITFLY_ENV_FOLDER=map_010_density_medium_dynamic_speed_2mps \
 bash launch_evaluation.bash 1 vision fixed_env offset=0
 ```
 
 该命令在一张已生成的森林场景中运行一次单帧模型，结果写入 `evaluation.yaml`。将 `offset` 改为 `1` 或 `2` 可切换另外两种输入模型。
 
-### 4. 运行消融实验并选择最优模型
+### 4. 运行消融实验
 
-该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型，并根据成功率、碰撞率和飞行时间选出主模型。
+该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型。固定无人机速度为5m/s、森林密度为medium，并设置8个动态障碍物。
+
+每个模型运行：
+
+```text
+3个动态障碍速度（1 / 2 / 3m/s）× 10张地图 × 5个phase seed = 150轮
+```
+
+三个模型合计 **450轮**。汇总指标包括：
+
+- 成功率：到达终点且全程零碰撞的rollout比例。
+- 碰撞率：至少发生一次碰撞的rollout比例。
+- 飞行时间：只统计成功rollout，并报告均值和中位数。
+- 成功率的95% bootstrap CI。
+- 相同case下模型间的paired difference。
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
@@ -164,7 +178,6 @@ python3 envtest/benchmark/run_benchmark.py \
 
 python3 envtest/benchmark/summarize_results.py \
   --results results/forest_ablation_v1/results.csv \
-  --select-best \
   --output results/forest_ablation_v1
 ```
 
@@ -175,19 +188,21 @@ python3 envtest/benchmark/summarize_results.py \
 - `--policy`：需要运行的模型，可重复指定。
 - `--output`：结果目录。
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`。
-- `--scenario <name>`：可选，只运行指定条件，例如 `flight_speed_3`、`forest_density_high` 或 `dynamic_high`。
+- `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 
-消融完成后，最优模型写入 `results/forest_ablation_v1/selected_policy.yaml`。
+汇总脚本只生成 `summary.csv`、`summary.json`、paired comparison和图表，不自动排序或选择模型。根据这些结果人工决定用于主对比实验的模型。
 
 ### 5. 运行主对比实验
 
-该实验在未参与选优的 test maps 上，将消融选出的模型与官方 ViTFly 进行配对比较，并测试飞行速度、森林密度和动态障碍速度条件。
+该实验在未参与消融的 test maps 上，将人工选择的模型与官方 ViTFly 进行配对比较，并测试飞行速度、森林密度和动态障碍速度条件。先将 `SELECTED_POLICY` 设置为人工选择的 `single`、`adjacent` 或 `skip_one`。
 
 ```bash
+SELECTED_POLICY=adjacent
+
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --selected-policy results/forest_ablation_v1/selected_policy.yaml \
+  --policy "$SELECTED_POLICY" \
   --policy original_vitfly \
   --output results/main_comparison_v1 \
   --resume

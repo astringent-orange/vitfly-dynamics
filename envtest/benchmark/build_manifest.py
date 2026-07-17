@@ -11,26 +11,34 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 VISION_ROOT = ROOT / "flightmare" / "flightpy" / "configs" / "vision"
-PROFILES = {
-    "dynamic_off": 0.0,
-    "dynamic_collection": 1.0,
-    "dynamic_high": 1.5,
-}
 
 CASE_FIELDS = [
     "case_id", "split", "scenario_id", "scene_id", "map_id", "phase_seed",
     "desired_speed", "forest_density", "tree_count", "dynamic_profile",
-    "dynamic_speed_multiplier", "scene_path", "scene_hash", "evaluation_profile",
+    "dynamic_speed_mps", "scene_path", "scene_hash", "evaluation_profile",
 ]
 SCENE_FIELDS = [
     "scene_id", "map_id", "forest_density", "tree_count", "dynamic_profile",
-    "scene_path", "scene_hash",
+    "dynamic_speed_mps", "scene_path", "scene_hash",
 ]
 
 
 def load(path):
     with open(path) as stream:
         return yaml.safe_load(stream) or {}
+
+
+def dynamic_profiles(cfg):
+    profiles = cfg.get("scenario", {}).get("dynamic", {}).get("profiles", {})
+    if not profiles:
+        raise ValueError("scenario.dynamic.profiles must define dynamic obstacle speeds")
+    return {
+        name: {
+            "nominal_speed_mps": float(values["nominal_speed_mps"]),
+            "speed_multiplier": float(values["speed_multiplier"]),
+        }
+        for name, values in profiles.items()
+    }
 
 
 def hash_scene(path):
@@ -58,19 +66,20 @@ def scene_path(cfg, map_id, density, profile):
 def write_csv(path, fields, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
 
 def build(cfg):
     scenario = cfg["scenario"]
+    profiles = dynamic_profiles(cfg)
     scene_rows = []
     scene_lookup = {}
     all_maps = sorted(set(scenario["map_ids"]["validation"] + scenario["map_ids"]["test"]))
     for map_id in all_maps:
         for density, tree_count in scenario["density_counts"].items():
-            for profile, multiplier in PROFILES.items():
+            for profile, profile_cfg in profiles.items():
                 scene_id, path, actual_count, digest = scene_path(cfg, map_id, density, profile)
                 if actual_count and actual_count != int(tree_count):
                     raise ValueError(f"{scene_id} has {actual_count} trees, expected {tree_count}")
@@ -81,6 +90,7 @@ def build(cfg):
                     "forest_density": density,
                     "tree_count": actual_count or tree_count,
                     "dynamic_profile": profile,
+                    "dynamic_speed_mps": profile_cfg["nominal_speed_mps"],
                     "scene_path": relative,
                     "scene_hash": digest,
                 })
@@ -104,7 +114,7 @@ def build(cfg):
                         "forest_density": density,
                         "tree_count": tree_count,
                         "dynamic_profile": profile,
-                        "dynamic_speed_multiplier": PROFILES[profile],
+                        "dynamic_speed_mps": profiles[profile]["nominal_speed_mps"],
                         "scene_path": relative,
                         "scene_hash": digest,
                         "evaluation_profile": "strict",
@@ -116,18 +126,17 @@ def build(cfg):
     val_phases = scenario["phase_seeds"]["validation"]
     test_phases = scenario["phase_seeds"]["test"]
     ablation_entries = [
-        ("dynamic_off", 5.0, "medium", "dynamic_off"),
-        ("dynamic_collection", 5.0, "medium", "dynamic_collection"),
-        ("dynamic_high", 5.0, "medium", "dynamic_high"),
+        (profile, 5.0, "medium", profile)
+        for profile in cfg["design"]["ablation_validation"]["dynamic_profiles"]
     ]
     comparison_entries = [
-        ("baseline", 5.0, "medium", "dynamic_collection"),
-        ("flight_speed_3", 3.0, "medium", "dynamic_collection"),
-        ("flight_speed_7", 7.0, "medium", "dynamic_collection"),
-        ("forest_density_low", 5.0, "low", "dynamic_collection"),
-        ("forest_density_high", 5.0, "high", "dynamic_collection"),
-        ("dynamic_off", 5.0, "medium", "dynamic_off"),
-        ("dynamic_high", 5.0, "medium", "dynamic_high"),
+        ("baseline", 5.0, "medium", "dynamic_speed_2mps"),
+        ("flight_speed_3", 3.0, "medium", "dynamic_speed_2mps"),
+        ("flight_speed_7", 7.0, "medium", "dynamic_speed_2mps"),
+        ("forest_density_low", 5.0, "low", "dynamic_speed_2mps"),
+        ("forest_density_high", 5.0, "high", "dynamic_speed_2mps"),
+        ("dynamic_speed_1mps", 5.0, "medium", "dynamic_speed_1mps"),
+        ("dynamic_speed_3mps", 5.0, "medium", "dynamic_speed_3mps"),
     ]
     return scene_rows, cases_for("validation", validation, val_phases, ablation_entries), cases_for("test", test, test_phases, comparison_entries)
 

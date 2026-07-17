@@ -36,9 +36,17 @@ scenario:
     high: 150
   dynamic:
     count: 8
-    collection_speed_multiplier: 1.0
-    high_speed_multiplier: 1.5
     medium_period_seconds: [6.0, 10.0]
+    profiles:
+      dynamic_speed_1mps:
+        nominal_speed_mps: 1.0
+        speed_multiplier: 0.5
+      dynamic_speed_2mps:
+        nominal_speed_mps: 2.0
+        speed_multiplier: 1.0
+      dynamic_speed_3mps:
+        nominal_speed_mps: 3.0
+        speed_multiplier: 1.5
   forest_roi: [2.0, 60.0, -10.0, 10.0]
   min_tree_spacing: 1.0
   endpoint_clearance: 3.0
@@ -59,7 +67,7 @@ design:
     split: validation
     speed: 5.0
     density: medium
-    dynamic_profiles: [dynamic_off, dynamic_collection, dynamic_high]
+    dynamic_profiles: [dynamic_speed_1mps, dynamic_speed_2mps, dynamic_speed_3mps]
   comparison_test:
     split: test
     scenarios:
@@ -68,5 +76,5 @@ design:
       - flight_speed_7
       - forest_density_low
       - forest_density_high
-      - dynamic_off
-      - dynamic_high
+      - dynamic_speed_1mps
+      - dynamic_speed_3mps

@@ -27,6 +27,11 @@ class ManifestTest(unittest.TestCase):
         rows = self.read("comparison_test_cases.csv")
         self.assertTrue(all(row["tree_count"] == "100" for row in rows if row["forest_density"] == "medium"))
 
+    def test_all_cases_use_named_positive_dynamic_speeds(self):
+        rows = self.read("ablation_validation_cases.csv") + self.read("comparison_test_cases.csv")
+        self.assertEqual({row["dynamic_speed_mps"] for row in rows}, {"1.0", "2.0", "3.0"})
+        self.assertTrue(all(row["dynamic_profile"].startswith("dynamic_speed_") for row in rows))
+
 
 if __name__ == "__main__":
     unittest.main()

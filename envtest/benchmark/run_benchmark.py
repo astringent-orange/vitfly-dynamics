@@ -21,6 +21,8 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG = ROOT / "envtest" / "benchmark" / "configs" / "forest_benchmark_v1.yaml"
+DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "ablation_validation_cases.csv"
 RESULT_FIELDS = [
     "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
@@ -205,10 +207,10 @@ def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):
     return summary
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--cases", required=True)
+    parser.add_argument("--config", default=DEFAULT_CONFIG, help=f"Benchmark config (default: {DEFAULT_CONFIG})")
+    parser.add_argument("--cases", default=DEFAULT_CASES, help=f"Case manifest (default: {DEFAULT_CASES})")
     parser.add_argument("--policy", action="append", default=[])
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--limit", type=int)
@@ -216,6 +218,11 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     cfg = load(args.config)

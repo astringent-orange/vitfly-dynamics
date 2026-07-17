@@ -1,10 +1,20 @@
 import unittest
 from datetime import datetime
 
-from envtest.benchmark.run_benchmark import resolve_output_path
+from envtest.benchmark.run_benchmark import (
+    DEFAULT_CASES,
+    DEFAULT_CONFIG,
+    build_parser,
+    resolve_output_path,
+)
 
 
 class RunnerTest(unittest.TestCase):
+    def test_default_inputs_are_forest_ablation_files(self):
+        args = build_parser().parse_args(["--policy", "single"])
+        self.assertEqual(args.config, DEFAULT_CONFIG)
+        self.assertEqual(args.cases, DEFAULT_CASES)
+
     def test_ablation_uses_policy_and_timestamp_as_default_output(self):
         output, used_default = resolve_output_path(
             "envtest/benchmark/manifests/ablation_validation_cases.csv",

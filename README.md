@@ -188,8 +188,6 @@ flight_speed_7
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
-  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
-  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
   --policy single
 ```
 
@@ -197,8 +195,6 @@ python3 envtest/benchmark/run_benchmark.py \
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
-  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
-  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
   --policy adjacent
 ```
 
@@ -206,12 +202,10 @@ python3 envtest/benchmark/run_benchmark.py \
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
-  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
-  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
   --policy skip_one
 ```
 
-消融实验一次只允许一个 `--policy`。未指定 `--output` 时，结果自动写入带当前时间的目录，例如：
+`--config` 默认使用 `envtest/benchmark/configs/forest_benchmark_v1.yaml`，`--cases` 默认使用 `envtest/benchmark/manifests/ablation_validation_cases.csv`，需要测试其他配置或manifest时仍可显式覆盖。消融实验一次只允许一个 `--policy`。未指定 `--output` 时，结果自动写入带当前时间的目录，例如：
 
 ```text
 result/ablation/single_20260717_151230/
@@ -241,8 +235,8 @@ ablation_flight_speed.png
 
 主要参数：
 
-- `--config`：场景、模型和评价标准配置。
-- `--cases`：本次实验使用的固定 case manifest。
+- `--config`：场景、模型和评价标准配置，默认使用森林Benchmark配置。
+- `--cases`：本次实验使用的固定 case manifest，默认使用消融validation manifest。
 - `--policy`：本次运行的模型；消融实验只能指定一个。
 - `--output`：可选。消融实验默认使用 `result/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。

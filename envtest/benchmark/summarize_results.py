@@ -74,15 +74,20 @@ def read_result_files(paths):
     return rows
 
 
-def latest_policy_result_paths(root=ABLATION_RESULTS_ROOT):
-    """Find the most recently modified result file for every ablation policy."""
+def latest_named_result_paths(root, policy_order):
+    """Find the most recently modified result file for every named policy."""
     paths = []
-    for policy in POLICY_ORDER:
+    for policy in policy_order:
         candidates = [path for path in Path(root).glob(f"{policy}_*/results.csv") if path.is_file()]
         if not candidates:
-            raise FileNotFoundError(f"no ablation results found for {policy} under {root}")
+            raise FileNotFoundError(f"no results found for {policy} under {root}")
         paths.append(max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path))))
     return paths
+
+
+def latest_policy_result_paths(root=ABLATION_RESULTS_ROOT):
+    """Find the most recently modified result file for every ablation policy."""
+    return latest_named_result_paths(root, POLICY_ORDER)
 
 
 def write_csv(path, fields, rows):
@@ -173,17 +178,17 @@ def paired_comparisons(rows):
     return output
 
 
-def ordered_policies(summaries):
+def ordered_policies(summaries, policy_order=POLICY_ORDER):
     present = {row["policy_id"] for row in summaries}
-    return [policy for policy in POLICY_ORDER if policy in present]
+    return [policy for policy in policy_order if policy in present]
 
 
-def build_factor_figure(summaries, spec):
+def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
     """Build one three-panel single-factor figure from summary rows."""
     import matplotlib.pyplot as plt
 
     lookup = {(row["policy_id"], row["scenario_id"]): row for row in summaries}
-    policies = ordered_policies(summaries)
+    policies = ordered_policies(summaries, policy_order)
     x_values = list(spec["x_values"])
     fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
 
@@ -237,7 +242,13 @@ def build_factor_figure(summaries, spec):
     return fig, axes
 
 
-def plot_factor_sweeps(summaries, output):
+def plot_factor_sweeps(
+    summaries,
+    output,
+    policy_order=POLICY_ORDER,
+    factor_specs=FACTOR_SPECS,
+    legacy_plot_filenames=LEGACY_PLOT_FILENAMES,
+):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -245,16 +256,50 @@ def plot_factor_sweeps(summaries, output):
     except ImportError:
         print("[SUMMARY] matplotlib unavailable; skipped plots")
         return
-    for filename in LEGACY_PLOT_FILENAMES:
+    for filename in legacy_plot_filenames:
         (output / filename).unlink(missing_ok=True)
+    for spec in factor_specs:
+        (output / spec["filename"]).unlink(missing_ok=True)
     present = {row["policy_id"] for row in summaries}
-    if not set(POLICY_ORDER).issubset(present):
-        print("[SUMMARY] skipped ablation plots until single, adjacent, and skip_one are present")
+    if not set(policy_order).issubset(present):
+        missing = ", ".join(policy for policy in policy_order if policy not in present)
+        print(f"[SUMMARY] skipped plots; missing policies: {missing}")
         return
-    for spec in FACTOR_SPECS:
-        fig, _axes = build_factor_figure(summaries, spec)
+    for spec in factor_specs:
+        fig, _axes = build_factor_figure(summaries, spec, policy_order)
         fig.savefig(output / spec["filename"], dpi=160)
         plt.close(fig)
+
+
+def write_summary_outputs(
+    rows,
+    result_paths,
+    output,
+    policy_order=POLICY_ORDER,
+    factor_specs=FACTOR_SPECS,
+):
+    """Write common CSV/JSON statistics and the requested factor figures."""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    summaries = summarize(rows)
+    write_csv(output / "summary.csv", SUMMARY_FIELDS, summaries)
+    paired = paired_comparisons(rows)
+    write_csv(output / "paired_model_differences.csv", PAIRED_FIELDS, paired)
+    with open(output / "summary.json", "w") as stream:
+        sources = [str(path) for path in result_paths]
+        json.dump({
+            "rows": summaries,
+            "paired_model_differences": paired,
+            "source": sources[0] if len(sources) == 1 else sources,
+            "sources": sources,
+        }, stream, indent=2)
+    plot_factor_sweeps(
+        summaries,
+        output,
+        policy_order=policy_order,
+        factor_specs=factor_specs,
+    )
+    return summaries, paired
 
 
 def build_parser():
@@ -273,23 +318,10 @@ def main():
         else latest_policy_result_paths()
     )
     output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
     for path in result_paths:
         print(f"[SUMMARY] source: {path}")
     rows = read_result_files(result_paths)
-    summaries = summarize(rows)
-    write_csv(output / "summary.csv", SUMMARY_FIELDS, summaries)
-    paired = paired_comparisons(rows)
-    write_csv(output / "paired_model_differences.csv", PAIRED_FIELDS, paired)
-    with open(output / "summary.json", "w") as stream:
-        sources = [str(path) for path in result_paths]
-        json.dump({
-            "rows": summaries,
-            "paired_model_differences": paired,
-            "source": sources[0] if len(sources) == 1 else sources,
-            "sources": sources,
-        }, stream, indent=2)
-    plot_factor_sweeps(summaries, output)
+    summaries, _paired = write_summary_outputs(rows, result_paths, output)
     print(f"[SUMMARY] wrote {output / 'summary.csv'} groups={len(summaries)}")
 
 

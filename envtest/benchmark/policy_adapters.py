@@ -9,9 +9,31 @@ can be added without changing the case manifest or result schema.
 import hashlib
 import os
 from pathlib import Path
+from typing import Any, Dict, Protocol
 
 
 SUPPORTED = {"vitfly_neural", "vitfly_legacy", "fastplanner_ros", "egoplanner_ros"}
+PLANNER_ADAPTERS = {"fastplanner_ros", "egoplanner_ros"}
+PLANNER_COMMAND_TOPIC = "/kingfisher/dodgeros_pilot/feedthrough_command"
+
+
+class PlannerLifecycle(Protocol):
+    """Interface a future FastPlanner/EGO-Planner ROS bridge must implement."""
+
+    def validate(self, policy_config: Dict[str, Any]) -> None:
+        ...
+
+    def start(self, case_config: Dict[str, Any]) -> None:
+        ...
+
+    def wait_ready(self, timeout: float) -> bool:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    def metadata(self) -> Dict[str, Any]:
+        ...
 
 
 def checkpoint_sha256(path):
@@ -35,17 +57,37 @@ def validate_policy(policy):
     offset = int(policy.get("frame_offset", 0))
     if offset not in (0, 1, 2):
         raise ValueError("frame_offset must be 0, 1, or 2")
-    if policy["adapter"].startswith("vitfly") and not str(policy.get("checkpoint", "")).strip():
+    adapter = policy["adapter"]
+    enabled = bool(policy.get("enabled", True))
+    if adapter.startswith("vitfly") and not str(policy.get("checkpoint", "")).strip():
         raise ValueError(f"{policy['id']} requires a checkpoint")
+    if adapter in PLANNER_ADAPTERS:
+        command_topic = policy.get("command_topic", PLANNER_COMMAND_TOPIC)
+        command_type = policy.get("command_type", "dodgeros_msgs/Command")
+        command_mode = int(policy.get("command_mode", 2))
+        command_frame = policy.get("command_frame", "world")
+        if command_topic != PLANNER_COMMAND_TOPIC:
+            raise ValueError(f"{policy['id']} must publish to {PLANNER_COMMAND_TOPIC}")
+        if command_type != "dodgeros_msgs/Command" or command_mode != 2 or command_frame != "world":
+            raise ValueError(f"{policy['id']} must publish world-frame dodgeros_msgs/Command mode 2")
+        if enabled and not str(policy.get("launch_command", "")).strip():
+            raise ValueError(f"enabled planner {policy['id']} requires launch_command")
     checkpoint = policy.get("checkpoint", "")
-    return dict(policy, frame_offset=offset, checkpoint_sha256=checkpoint_sha256(checkpoint) if checkpoint else "not_applicable")
+    return dict(
+        policy,
+        enabled=enabled,
+        frame_offset=offset,
+        checkpoint_sha256=checkpoint_sha256(checkpoint) if checkpoint else "not_applicable",
+    )
 
 
 def policy_environment(policy):
     """Environment variables consumed by the existing launch script."""
     adapter = policy["adapter"]
     if adapter not in ("vitfly_neural", "vitfly_legacy"):
-        raise NotImplementedError(f"{adapter} is reserved for a future ROS adapter")
+        if not policy.get("enabled", False):
+            raise RuntimeError(f"{policy['id']} is disabled because its ROS adapter is not integrated")
+        raise NotImplementedError(f"{adapter} must implement planner launch and command conversion")
     return {
         "VITFLY_OFFSET": str(policy.get("frame_offset", 0)),
         "VITFLY_MODEL_PATH": str(Path(policy["checkpoint"]).resolve()),

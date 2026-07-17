@@ -244,25 +244,104 @@ ablation_flight_speed.png
 
 ### 5. 运行主对比实验
 
-该实验在未参与消融的 test maps 上，将人工选择的模型与官方 ViTFly 进行配对比较，并测试飞行速度、森林密度和动态障碍速度条件。先将 `SELECTED_POLICY` 设置为人工选择的 `single`、`adjacent` 或 `skip_one`。
+该实验在未参与消融的 test maps 上比较人工选出的最优模型、官方ViTFly、FastPlanner和EGO-Planner。仍采用动态障碍速度、森林密度和无人机速度三个单因素扫描，共用同一个baseline：
 
-```bash
-SELECTED_POLICY=adjacent
-
-python3 envtest/benchmark/run_benchmark.py \
-  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
-  --cases envtest/benchmark/manifests/comparison_test_cases.csv \
-  --policy "$SELECTED_POLICY" \
-  --policy original_vitfly \
-  --output results/main_comparison_v1 \
-  --resume
-
-python3 envtest/benchmark/summarize_results.py \
-  --results results/main_comparison_v1/results.csv \
-  --output results/main_comparison_v1
+```text
+7个不重复条件 × 10张test地图 × 2个phase seed = 140轮/模型
+4个模型 × 140轮 = 560轮
 ```
 
-结果包括每个 rollout 的记录，以及按模型和场景汇总的成功率、碰撞率、成功轨迹飞行时间、95% bootstrap CI 和 paired model difference。修改 checkpoint、配置或 manifest 后应使用新的结果目录。
+每次命令只测试一个模型。主对比默认使用森林Benchmark配置和 `comparison_test_cases.csv`，结果自动写入 `results/comparation/<model>_YYYYMMDD_HHMMSS/`。
+
+人工选择的最优模型需要通过 `--best-policy` 指定：
+
+```bash
+python3 envtest/benchmark/run_comparison.py \
+  --model best \
+  --best-policy adjacent
+```
+
+`--best-policy` 可选 `single`、`adjacent` 或 `skip_one`。结果中统一显示为 `best_ours`，同时在每行记录实际的 `source_policy_id`、frame offset和checkpoint hash。
+
+官方ViTFly：
+
+```bash
+python3 envtest/benchmark/run_comparison.py --model vitfly
+```
+
+规划器接入后分别运行：
+
+```bash
+python3 envtest/benchmark/run_comparison.py --model fastplanner
+```
+
+```bash
+python3 envtest/benchmark/run_comparison.py --model egoplanner
+```
+
+恢复中断实验时，显式传入原来的结果目录：
+
+```bash
+python3 envtest/benchmark/run_comparison.py \
+  --model best \
+  --best-policy adjacent \
+  --output results/comparation/best_ours_20260717_163000 \
+  --resume
+```
+
+四个模型全部完成后运行：
+
+```bash
+python3 envtest/benchmark/summarize_comparison.py
+```
+
+汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases；发现中断或不配对的结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparation/table/`：
+
+```text
+summary.csv
+summary.json
+paired_model_differences.csv
+comparison_dynamic_speed.png
+comparison_forest_density.png
+comparison_flight_speed.png
+```
+
+每张图包含成功率及95% bootstrap CI、碰撞率、成功rollout中位飞行时间三个纵向子图，以及 `best_ours`、`vitfly`、`fastplanner`、`egoplanner` 四条曲线。需要汇总指定批次时，可以重复传入 `--results` 并用 `--output` 指定目录。
+
+#### FastPlanner/EGO-Planner接入接口
+
+当前配置已保留 `fastplanner_ros` 和 `egoplanner_ros`，但默认 `enabled: false`。未接入时运行对应命令会在启动仿真前明确报错，不会生成无效实验结果。
+
+两个规划器必须满足相同的生命周期接口：
+
+```text
+validate(policy_config)
+start(case_config)
+wait_ready(timeout)
+stop()
+metadata()
+```
+
+规划器可以在adapter内部订阅自己的里程计、深度图、点云或地图消息，也可以输出原生轨迹；但送入仿真控制器前必须转换为统一命令：
+
+```text
+topic: /kingfisher/dodgeros_pilot/feedthrough_command
+type: dodgeros_msgs/Command
+mode: 2
+velocity frame: world
+velocity: [vx, vy, vz]
+```
+
+接入步骤：
+
+1. 下载并在同一catkin工作空间编译规划器及其依赖。
+2. 编写ROS bridge，向规划器提供当前case的地图、目标点、期望速度和状态输入。
+3. 在bridge中将规划器轨迹或控制量转换为上述world-frame LINVEL命令。
+4. 在 `forest_benchmark_v1.yaml` 中填写 `launch_command`、`ready_topic`，并将 `enabled` 改为 `true`。
+5. 在 `policy_adapters.py` 中实现对应规划器的启动、ready等待、进程监控和停止逻辑。
+6. 先验证进程退出会记录为 `controller_error`，再完成单case测试，最后运行140轮正式测试。
+
+所有规划器使用同一独立evaluator，指标仍为成功率、碰撞率、成功飞行时间、95%成功率CI、paired model difference和结构化失败原因。规划器内部报告的“成功”不能替代Benchmark evaluator的判定。
 
 ## Gather dataset
 

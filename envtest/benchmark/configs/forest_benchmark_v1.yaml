@@ -21,6 +21,24 @@ policies:
     adapter: vitfly_legacy
     checkpoint: models/ViTLSTM_model.pth
     frame_offset: 0
+  - id: fastplanner
+    adapter: fastplanner_ros
+    enabled: false
+    launch_command:
+    ready_topic:
+    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
+    command_type: dodgeros_msgs/Command
+    command_mode: 2
+    command_frame: world
+  - id: egoplanner
+    adapter: egoplanner_ros
+    enabled: false
+    launch_command:
+    ready_topic:
+    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
+    command_type: dodgeros_msgs/Command
+    command_mode: 2
+    command_frame: world
 
 scenario:
   map_ids:
@@ -63,6 +81,19 @@ evaluation_profiles:
     plots: false
 
 design:
+  comparison_models:
+    best:
+      result_id: best_ours
+      candidates: [single, adjacent, skip_one]
+    vitfly:
+      result_id: vitfly
+      source_policy: original_vitfly
+    fastplanner:
+      result_id: fastplanner
+      source_policy: fastplanner
+    egoplanner:
+      result_id: egoplanner
+      source_policy: egoplanner
   conditions:
     baseline:
       desired_speed: 5.0

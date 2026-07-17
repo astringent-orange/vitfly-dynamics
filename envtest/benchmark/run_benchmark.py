@@ -25,7 +25,8 @@ DEFAULT_CONFIG = ROOT / "envtest" / "benchmark" / "configs" / "forest_benchmark_
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "ablation_validation_cases.csv"
 DEFAULT_ABLATION_OUTPUT = ROOT / "results" / "ablation"
 RESULT_FIELDS = [
-    "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
+    "experiment_id", "case_id", "policy_id", "source_policy_id", "adapter", "frame_offset",
+    "checkpoint_sha256", "scenario_id",
     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
     "dynamic_speed_mps", "phase_seed", "goal_reached", "success", "collision",
     "collision_count", "flight_time", "termination_elapsed_time", "termination_reason",
@@ -37,6 +38,15 @@ ABLATION_MANIFEST = "ablation_validation_cases.csv"
 def load(path):
     with open(path) as stream:
         return yaml.safe_load(stream) or {}
+
+
+def normalize_policy_paths(cfg):
+    """Resolve repository-relative checkpoint paths independently of the caller's cwd."""
+    for policy in cfg.get("policies", []):
+        checkpoint = policy.get("checkpoint")
+        if checkpoint and not Path(checkpoint).is_absolute():
+            policy["checkpoint"] = str(ROOT / checkpoint)
+    return cfg
 
 
 def read_csv(path):
@@ -213,6 +223,7 @@ def build_parser():
     parser.add_argument("--config", default=DEFAULT_CONFIG, help=f"Benchmark config (default: {DEFAULT_CONFIG})")
     parser.add_argument("--cases", default=DEFAULT_CASES, help=f"Case manifest (default: {DEFAULT_CASES})")
     parser.add_argument("--policy", action="append", default=[])
+    parser.add_argument("--policy-alias", help="Stable result ID for a single selected policy")
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; defaults to a timestamped directory for ablation runs")
@@ -222,12 +233,21 @@ def build_parser():
     return parser
 
 
-def main():
+def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    cfg = load(args.config)
+    cfg = normalize_policy_paths(load(args.config))
     policies = select_policies(cfg, args.policy)
+    if args.policy_alias:
+        if len(policies) != 1:
+            parser.error("--policy-alias requires exactly one selected --policy")
+        if not args.policy_alias.replace("_", "").isalnum():
+            parser.error("--policy-alias may contain only letters, numbers, and underscores")
+        source = policies[0]
+        policies = [dict(source, id=args.policy_alias, source_policy_id=source["id"])]
+    else:
+        policies = [dict(policy, source_policy_id=policy.get("source_policy_id", policy["id"])) for policy in policies]
     try:
         output, used_default_output = resolve_output_path(
             args.cases,
@@ -274,13 +294,17 @@ def main():
             row = {
                 "experiment_id": cfg.get("experiment_id", "benchmark"),
                 "case_id": case["case_id"], "policy_id": policy["id"],
+                "source_policy_id": policy["source_policy_id"],
+                "adapter": policy["adapter"],
+                "frame_offset": policy.get("frame_offset", 0),
                 "checkpoint_sha256": policy.get("checkpoint_sha256", "missing"),
                 "scenario_id": case["scenario_id"], "map_id": case["map_id"],
                 "desired_speed": case["desired_speed"], "forest_density": case["forest_density"],
                 "tree_count": case["tree_count"], "dynamic_profile": case["dynamic_profile"],
                 "dynamic_speed_mps": case["dynamic_speed_mps"], "phase_seed": case["phase_seed"],
                 **{field: result.get(field, "") for field in RESULT_FIELDS if field not in {
-                    "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
+                    "experiment_id", "case_id", "policy_id", "source_policy_id", "adapter", "frame_offset",
+                    "checkpoint_sha256", "scenario_id",
                     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
                     "dynamic_speed_mps", "phase_seed", "completed_at_utc",
                 }},

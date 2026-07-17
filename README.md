@@ -98,10 +98,11 @@ pip install -r requirements.txt
 
 ```bash
 conda activate pubflight
-source /opt/ros/noetic/setup.bash
 source ~/catkin_ws/devel/setup.bash
 cd ~/catkin_ws/src/vitfly-dynamics
 ```
+
+`devel/setup.bash` 已记录工作空间的 ROS Noetic underlay，因此会同时加载 `/opt/ros/noetic`，不需要在每个新终端重复执行两条 `source`。如果当前终端已经加载过工作空间，也不需要再次执行；只有尚未构建工作空间或无法找到 ROS 命令时，才单独执行 `source /opt/ros/noetic/setup.bash`。
 
 从仓库根目录运行 `launch_evaluation.bash` 时，脚本会自动使用当前仓库中的 `flightmare/`，无需手动设置 `FLIGHTMARE_PATH`。
 
@@ -122,6 +123,8 @@ python3 envtest/benchmark/build_manifest.py \
   --output envtest/benchmark/manifests
 ```
 
+Manifest 是冻结的 CSV 测试清单，每行代表一个 rollout case，并记录场景、地图、phase seed、飞行速度、森林密度和动态障碍条件。不同模型复用相同 case，保证结果可复现且能够配对比较。
+
 ### 2. 确认模型配置
 
 模型名称和权重在 `envtest/benchmark/configs/forest_benchmark_v1.yaml` 中定义：
@@ -135,7 +138,19 @@ original_vitfly -> models/ViTLSTM_model.pth
 
 直接使用 `launch_evaluation.bash` 时，`offset=0/1/2` 会依次选择前三个默认 checkpoint；显式传入 `model_path=...` 可覆盖默认值。Benchmark runner 根据 policy 配置选择模型，不需要单独传 offset。
 
-### 3. 运行消融实验并选择最优模型
+### 3. 运行最简单的视觉测试
+
+```bash
+VITFLY_ENV_LEVEL=forest_benchmark_v1 \
+VITFLY_ENV_FOLDER=map_010_density_medium_dynamic_collection \
+bash launch_evaluation.bash 1 vision fixed_env offset=0
+```
+
+该命令在一张已生成的森林场景中运行一次单帧模型，结果写入 `evaluation.yaml`。将 `offset` 改为 `1` 或 `2` 可切换另外两种输入模型。
+
+### 4. 运行消融实验并选择最优模型
+
+该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型，并根据成功率、碰撞率和飞行时间选出主模型。
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
@@ -164,7 +179,9 @@ python3 envtest/benchmark/summarize_results.py \
 
 消融完成后，最优模型写入 `results/forest_ablation_v1/selected_policy.yaml`。
 
-### 4. 运行主对比实验
+### 5. 运行主对比实验
+
+该实验在未参与选优的 test maps 上，将消融选出的模型与官方 ViTFly 进行配对比较，并测试飞行速度、森林密度和动态障碍速度条件。
 
 ```bash
 python3 envtest/benchmark/run_benchmark.py \

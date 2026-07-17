@@ -58,7 +58,7 @@ class ComparisonRunnerTest(unittest.TestCase):
                 "command_mode": 1,
             })
 
-    def test_default_output_uses_comparation_directory(self):
+    def test_default_output_uses_comparison_directory(self):
         output = default_output_path("best_ours", datetime(2026, 7, 17, 16, 30, 45))
         self.assertEqual(output, DEFAULT_OUTPUT_ROOT / "best_ours_20260717_163045")
 

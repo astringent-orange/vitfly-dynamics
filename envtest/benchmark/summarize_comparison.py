@@ -24,7 +24,7 @@ except ImportError:
     )
 
 
-COMPARISON_RESULTS_ROOT = ROOT / "results" / "comparation"
+COMPARISON_RESULTS_ROOT = ROOT / "results" / "comparison"
 DEFAULT_TABLE_OUTPUT = COMPARISON_RESULTS_ROOT / "table"
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "comparison_test_cases.csv"
 COMPARISON_POLICY_ORDER = ("best_ours", "vitfly", "fastplanner", "egoplanner")

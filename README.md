@@ -255,7 +255,7 @@ ablation_flight_speed.png
 4个模型 × 140轮 = 560轮
 ```
 
-每次命令只测试一个模型。主对比默认使用森林Benchmark配置和 `comparison_test_cases.csv`，结果自动写入 `results/comparation/<model>_YYYYMMDD_HHMMSS/`。
+每次命令只测试一个模型。主对比默认使用森林Benchmark配置和 `comparison_test_cases.csv`，结果自动写入 `results/comparison/<model>_YYYYMMDD_HHMMSS/`。
 
 人工选择的最优模型直接通过 `--policy` 指定：
 
@@ -286,7 +286,7 @@ python3 envtest/benchmark/run_comparison.py --policy egoplanner
 ```bash
 python3 envtest/benchmark/run_comparison.py \
   --policy adjacent \
-  --output results/comparation/best_ours_20260717_163000 \
+  --output results/comparison/best_ours_20260717_163000 \
   --resume
 ```
 
@@ -296,7 +296,7 @@ python3 envtest/benchmark/run_comparison.py \
 python3 envtest/benchmark/summarize_comparison.py
 ```
 
-汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases；发现中断或不配对的结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparation/table/`：
+汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases；发现中断或不配对的结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparison/table/`：
 
 ```text
 summary.csv

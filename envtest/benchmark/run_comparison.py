@@ -15,7 +15,7 @@ except ImportError:
 
 DEFAULT_CONFIG = ROOT / "envtest" / "benchmark" / "configs" / "forest_benchmark_v1.yaml"
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "comparison_test_cases.csv"
-DEFAULT_OUTPUT_ROOT = ROOT / "results" / "comparation"
+DEFAULT_OUTPUT_ROOT = ROOT / "results" / "comparison"
 POLICY_CHOICES = ("single", "adjacent", "skip_one", "vitfly", "fastplanner", "egoplanner")
 
 
@@ -59,7 +59,7 @@ def build_parser():
     parser.add_argument("--cases", default=DEFAULT_CASES, help="Immutable comparison manifest")
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--output", help="Result directory; timestamped under results/comparation by default")
+    parser.add_argument("--output", help="Result directory; timestamped under results/comparison by default")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)

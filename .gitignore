@@ -5,7 +5,7 @@ checklist.md
 *.code-workspace
 envtest/ros/train_set/
 
-# Generated experiment artifacts: distribute these outside Git.
+# Generated experiment artifacts
 training/datasets/
 training/logs/
 models/*.pth
@@ -13,13 +13,22 @@ models/*.pt
 models/*.ckpt
 envtest/ros/summary.yaml
 evaluation.yaml
+results/
 
-# Downloaded or generated simulation assets.
+# External release archives
+/environments.tar.xz
+/flightrender.tar.xz
+/pretrained_models.tar.xz
+/dataset.tar.xz
+/*.tar.xz.partial
+
+# Downloaded or generated simulation assets
 flightmare/flightrender/
 flightmare/flightpy/configs/vision/dynamic_astar_medium/
+flightmare/flightpy/configs/vision/forest_benchmark_v1/
 flightmare/flightros/src/motion_planning/data/*.ply
 
-# Optional presentation and documentation media.
+# Optional upstream presentation assets
 media/
 flightmare/docs/source/_images/
 flightmare/docs/flightmare.png

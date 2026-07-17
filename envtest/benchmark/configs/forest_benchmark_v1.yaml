@@ -1,0 +1,139 @@
+experiment_id: forest_benchmark_v1
+
+source_level: trees
+output_level: forest_benchmark_v1
+scene_seed: 20260716
+
+policies:
+  - id: single
+    adapter: vitfly_neural
+    checkpoint: models/current_frame/current_frame_vitlstm_000099.pth
+    frame_offset: 0
+  - id: adjacent
+    adapter: vitfly_neural
+    checkpoint: models/previous_frame/previous_frame_vitlstm_000099.pth
+    frame_offset: 1
+  - id: skip_one
+    adapter: vitfly_neural
+    checkpoint: models/second_previous_frame/second_previous_frame_vitlstm_000099.pth
+    frame_offset: 2
+  - id: original_vitfly
+    adapter: vitfly_legacy
+    checkpoint: models/ViTLSTM_model.pth
+    frame_offset: 0
+  - id: fastplanner
+    adapter: fastplanner_ros
+    enabled: false
+    launch_command:
+    ready_topic:
+    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
+    command_type: dodgeros_msgs/Command
+    command_mode: 2
+    command_frame: world
+  - id: egoplanner
+    adapter: egoplanner_ros
+    enabled: false
+    launch_command:
+    ready_topic:
+    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
+    command_type: dodgeros_msgs/Command
+    command_mode: 2
+    command_frame: world
+
+scenario:
+  map_ids:
+    validation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    test: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  phase_seeds:
+    validation: [8000, 8001]
+    test: [9000, 9001]
+  desired_speeds: [3.0, 5.0, 7.0]
+  density_counts:
+    low: 50
+    medium: 100
+    high: 150
+  dynamic:
+    count: 8
+    medium_period_seconds: [6.0, 10.0]
+    profiles:
+      dynamic_speed_1mps:
+        nominal_speed_mps: 1.0
+        speed_multiplier: 0.5
+      dynamic_speed_2mps:
+        nominal_speed_mps: 2.0
+        speed_multiplier: 1.0
+      dynamic_speed_3mps:
+        nominal_speed_mps: 3.0
+        speed_multiplier: 1.5
+  forest_roi: [2.0, 60.0, -10.0, 10.0]
+  min_tree_spacing: 1.0
+  endpoint_clearance: 3.0
+  astar_resolution: 0.3
+  static_inflation: 0.9
+
+evaluation_profiles:
+  strict:
+    start_x: 0.5
+    goal_x: 60.0
+    timeout_seconds: 60.0
+    collision_margin: 0.0
+    bounding_box: [-5.0, 65.0, -10.0, 10.0, 0.0, 10.0]
+    plots: false
+
+design:
+  comparison_models:
+    best:
+      result_id: best_ours
+      candidates: [single, adjacent, skip_one]
+    vitfly:
+      result_id: vitfly
+      source_policy: original_vitfly
+    fastplanner:
+      result_id: fastplanner
+      source_policy: fastplanner
+    egoplanner:
+      result_id: egoplanner
+      source_policy: egoplanner
+  conditions:
+    baseline:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+    dynamic_speed_1mps:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_1mps
+    dynamic_speed_3mps:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_3mps
+    forest_density_low:
+      desired_speed: 5.0
+      density: low
+      dynamic_profile: dynamic_speed_2mps
+    forest_density_high:
+      desired_speed: 5.0
+      density: high
+      dynamic_profile: dynamic_speed_2mps
+    flight_speed_3:
+      desired_speed: 3.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+    flight_speed_7:
+      desired_speed: 7.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+  single_factor_scenarios:
+    - baseline
+    - dynamic_speed_1mps
+    - dynamic_speed_3mps
+    - forest_density_low
+    - forest_density_high
+    - flight_speed_3
+    - flight_speed_7
+  ablation_validation:
+    split: validation
+    scenario_set: single_factor_scenarios
+  comparison_test:
+    split: test
+    scenario_set: single_factor_scenarios

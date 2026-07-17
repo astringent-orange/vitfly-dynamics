@@ -21,6 +21,10 @@ offset="${VITFLY_OFFSET:-0}"
 model_path="${VITFLY_MODEL_PATH:-}"
 phase_seed_override="${VITFLY_DYNAMIC_PHASE_SEED:-}"
 phase_seed_base="${VITFLY_DYNAMIC_PHASE_SEED_BASE:-1000}"
+policy_config="${VITFLY_POLICY_CONFIG:-}"
+case_config="${VITFLY_CASE_CONFIG:-}"
+evaluation_profile="${VITFLY_EVALUATION_PROFILE:-strict}"
+result_path="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
 
 for arg in "${@:3}"
 do
@@ -54,6 +58,21 @@ do
   elif [[ "$arg" == model_path=* ]]
   then
     model_path="${arg#model_path=}"
+  elif [[ "$arg" == policy_config=* ]]
+  then
+    policy_config="${arg#policy_config=}"
+  elif [[ "$arg" == case_config=* ]]
+  then
+    case_config="${arg#case_config=}"
+  elif [[ "$arg" == evaluation_profile=* ]]
+  then
+    evaluation_profile="${arg#evaluation_profile=}"
+  elif [[ "$arg" == result_path=* ]]
+  then
+    result_path="${arg#result_path=}"
+  elif [ "$arg" = "benchmark_mode" ]
+  then
+    export VITFLY_BENCHMARK_MODE=1
   elif [[ "$arg" == model_type=* || "$arg" == frame_offset=* ]]
   then
     echo "[LAUNCH SCRIPT] model_type/frame_offset are obsolete; use offset=0,1,2"
@@ -66,6 +85,11 @@ then
   echo "[LAUNCH SCRIPT] offset must be 0, 1, or 2, got: $offset"
   exit 1
 fi
+
+export VITFLY_POLICY_CONFIG="$policy_config"
+export VITFLY_CASE_CONFIG="$case_config"
+export VITFLY_EVALUATION_PROFILE="$evaluation_profile"
+export VITFLY_EVALUATION_PATH="$result_path"
 
 if ! [[ "$env_count" =~ ^[1-9][0-9]*$ ]]
 then
@@ -303,13 +327,15 @@ else
   launch_simulator || exit 1
 fi
 
-SUMMARY_FILE="evaluation.yaml"
+SUMMARY_FILE="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
+mkdir -p "$(dirname "$SUMMARY_FILE")"
 echo "" > $SUMMARY_FILE
 
 # generate datetime string to label summary folders with in evaluation_node.py
 datetime=$(date '+d%m_%d_t%H_%M')
 
 relaunch_sim=0
+batch_failed=0
 
 for i in $(eval echo {1..$N})
 do
@@ -369,10 +395,23 @@ do
   wait_for_topic /kingfisher/start_navigation 30 || exit 1
 
   start_time=$(date +%s)
-
   # Wait until the evaluation script has finished
   while ps -p $PY_PID > /dev/null
   do
+    if ! ps -p $COMP_PID > /dev/null
+    then
+      echo "[LAUNCH_EVALUATION] Controller exited before evaluator completed."
+      batch_failed=1
+      kill -SIGINT $PY_PID 2>/dev/null
+      cat > ./envtest/ros/summary.yaml <<'EOF'
+Success: false
+goal_reached: false
+collision: false
+collision_count: 0
+termination_reason: controller_error
+EOF
+      break
+    fi
     echo
     echo [LAUNCH_EVALUATION] Sending start navigation command
     echo
@@ -411,6 +450,11 @@ done
 if [ $ROS_PID ]
 then
   kill -SIGINT "$ROS_PID"
+fi
+
+if ((batch_failed))
+then
+  exit 2
 fi
 
 if [ "$2" = "state" ]

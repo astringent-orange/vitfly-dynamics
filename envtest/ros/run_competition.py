@@ -75,6 +75,26 @@ PLANNER_FIELDS = [
     "candidate_predicted_stop_distance",
 ]
 
+REPOSITORY_ROOT = os.path.abspath(opj(os.path.dirname(__file__), "..", ".."))
+DEFAULT_MODEL_PATHS = {
+    0: opj(REPOSITORY_ROOT, "models", "current_frame", "current_frame_vitlstm_000099.pth"),
+    1: opj(REPOSITORY_ROOT, "models", "previous_frame", "previous_frame_vitlstm_000099.pth"),
+    2: opj(REPOSITORY_ROOT, "models", "second_previous_frame", "second_previous_frame_vitlstm_000099.pth"),
+}
+
+
+def resolve_model_path(offset, model_path=None):
+    """Return an explicit checkpoint or the repository default for an offset."""
+    offset = int(offset)
+    if offset not in DEFAULT_MODEL_PATHS:
+        raise ValueError(f"unsupported frame offset: {offset}")
+    if model_path:
+        expanded = os.path.expanduser(model_path)
+        if not os.path.isabs(expanded):
+            expanded = opj(REPOSITORY_ROOT, expanded)
+        return os.path.abspath(expanded)
+    return DEFAULT_MODEL_PATHS[offset]
+
 
 class AgilePilotNode:
     def __init__(self, vision_based=False, offset=0, model_path=None, desVel=None, keyboard=False):
@@ -138,6 +158,11 @@ class AgilePilotNode:
 
         self.data_collection_xrange = [2, 60]
 
+        # Benchmark rollouts are evaluated by the dedicated evaluator and must
+        # never pollute the expert ``train_set``. State collection keeps the
+        # historical behavior when this flag is absent.
+        self.benchmark_mode = os.environ.get("VITFLY_BENCHMARK_MODE", "0") == "1"
+
         # Create a trajectory directory only after the first valid sample.
         self.folder = None
         self.env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
@@ -156,8 +181,8 @@ class AgilePilotNode:
 
         self.frame_offset = int(offset)
         self.model_type, self.num_input_frames, self.checkpoint_prefix = frame_mode_spec(self.frame_offset)
-        if self.vision_based and not model_path:
-            raise ValueError('[RUN_COMPETITION] vision-based inference requires --model_path')
+        if self.vision_based:
+            model_path = resolve_model_path(self.frame_offset, model_path)
 
         self.state_expert = None
         if not self.vision_based and not self.keyboard:
@@ -175,12 +200,16 @@ class AgilePilotNode:
             # Give full path if possible since the bash script runs from outside the folder
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
             metadata_path = opj(os.path.dirname(os.path.abspath(model_path)), 'run_metadata.json')
-            if not os.path.isfile(metadata_path):
+            allow_legacy = os.environ.get("VITFLY_ALLOW_LEGACY_CHECKPOINT", "0") == "1"
+            if not os.path.isfile(metadata_path) and not allow_legacy:
                 raise ValueError(f'[RUN_COMPETITION] Missing run_metadata.json next to {model_path}')
-            with open(metadata_path) as stream:
-                metadata = json.load(stream)
-            if metadata.get('model_type') != self.model_type or int(metadata.get('frame_offset', -1)) != self.frame_offset:
-                raise ValueError('[RUN_COMPETITION] checkpoint metadata does not match offset')
+            if os.path.isfile(metadata_path):
+                with open(metadata_path) as stream:
+                    metadata = json.load(stream)
+                if metadata.get('model_type') != self.model_type or int(metadata.get('frame_offset', -1)) != self.frame_offset:
+                    raise ValueError('[RUN_COMPETITION] checkpoint metadata does not match offset')
+            elif allow_legacy and self.frame_offset != 0:
+                raise ValueError('[RUN_COMPETITION] legacy checkpoints only support offset=0')
             self.model.eval()
 
             # Initialize hidden state
@@ -327,6 +356,8 @@ class AgilePilotNode:
         return [info[field] for field in PLANNER_FIELDS]
 
     def ensure_data_folder(self):
+        if self.benchmark_mode:
+            return
         if self.folder is not None:
             return
         base_folder = "train_set"
@@ -362,6 +393,8 @@ class AgilePilotNode:
                     pass
 
     def flush_data_log(self):
+        if getattr(self, "benchmark_mode", False):
+            return
         with self.data_log_lock:
             try:
                 if self.folder is not None and hasattr(self, "data_log"):
@@ -406,6 +439,8 @@ class AgilePilotNode:
         rospy.signal_shutdown(reason)
 
     def try_log_sample(self, command, state_snapshot, planner_info=None, nearest_margin=None):
+        if self.benchmark_mode:
+            return False
         with self.data_log_lock:
             return self._try_log_sample_locked(command, state_snapshot, planner_info, nearest_margin)
 
@@ -521,7 +556,7 @@ class AgilePilotNode:
         if state_snapshot.pos[0] < 0.1:
             self.start_time = command.t
 
-        if state_snapshot.pos[0] >= 60 and self.logged_time_flag == 0:
+        if state_snapshot.pos[0] >= 60 and self.logged_time_flag == 0 and not self.benchmark_mode:
             file = "timeTaken.dat"
             with open(file, "a") as file:
                 file.write(str(float(command.t - self.start_time))+"\n")
@@ -693,11 +728,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Agile Pilot.")
     parser.add_argument("--vision_based", help="Fly vision-based", required=False, dest="vision_based", action="store_true")
     parser.add_argument('--offset', type=int, choices=(0, 1, 2), default=0, help='frame mode: 0=current, 1=previous, 2=second previous')
-    parser.add_argument('--model_path', type=str, default=None, help='absolute path to model checkpoint')
+    parser.add_argument('--model_path', type=str, default=None, help='optional checkpoint path; defaults from --offset')
     parser.add_argument('--des_vel', type=float, default=None, help='desired velocity for quadrotor')
+    parser.add_argument('--benchmark-mode', action='store_true', help='isolate benchmark rollout logging from train_set')
+    parser.add_argument('--policy-config', type=str, default=None, help='optional benchmark policy YAML (metadata only)')
+    parser.add_argument('--case-config', type=str, default=None, help='optional benchmark case YAML (metadata only)')
+    parser.add_argument('--evaluation-profile', type=str, default=None, help='benchmark evaluation profile name')
     parser.add_argument("--keyboard", help="Fly state-based mode but take velocity commands from keyboard WASD", required=False, dest="keyboard", action="store_true")
 
     args = parser.parse_args()
+    if args.benchmark_mode:
+        os.environ["VITFLY_BENCHMARK_MODE"] = "1"
+    for name, value in (("VITFLY_POLICY_CONFIG", args.policy_config), ("VITFLY_CASE_CONFIG", args.case_config), ("VITFLY_EVALUATION_PROFILE", args.evaluation_profile)):
+        if value:
+            os.environ[name] = value
     agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, offset=args.offset, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard)
     rospy.spin()
     agile_pilot_node.flush_data_log()

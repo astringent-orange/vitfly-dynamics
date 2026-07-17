@@ -14,7 +14,10 @@ from pathlib import Path
 
 import yaml
 
-from policy_adapters import policy_environment, policy_index
+try:
+    from .policy_adapters import policy_environment, policy_index
+except ImportError:
+    from policy_adapters import policy_environment, policy_index
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +28,7 @@ RESULT_FIELDS = [
     "collision_count", "flight_time", "termination_elapsed_time", "termination_reason",
     "runner_returncode", "completed_at_utc",
 ]
+ABLATION_MANIFEST = "ablation_validation_cases.csv"
 
 
 def load(path):
@@ -118,6 +122,20 @@ def select_policies(cfg, requested):
     return list(unique.values())
 
 
+def resolve_output_path(cases_path, policies, requested_output=None, now=None):
+    """Enforce one-policy ablations and provide their timestamped output path."""
+    is_ablation = Path(cases_path).name == ABLATION_MANIFEST
+    if is_ablation and len(policies) != 1:
+        raise ValueError("ablation runs require exactly one --policy")
+    if requested_output:
+        return Path(requested_output), False
+    if not is_ablation:
+        raise ValueError("--output is required outside an ablation run")
+    current = now or datetime.now()
+    timestamp = current.strftime("%Y%m%d_%H%M%S")
+    return Path("result") / "ablation" / f"{policies[0]['id']}_{timestamp}", True
+
+
 def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):
     evaluation_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__evaluation.yaml"
     env = os.environ.copy()
@@ -194,7 +212,7 @@ def main():
     parser.add_argument("--policy", action="append", default=[])
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", help="Result directory; defaults to a timestamped directory for ablation runs")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
@@ -202,6 +220,14 @@ def main():
 
     cfg = load(args.config)
     policies = select_policies(cfg, args.policy)
+    try:
+        output, used_default_output = resolve_output_path(
+            args.cases,
+            policies,
+            requested_output=args.output,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     cases = read_csv(args.cases)
     if args.scenario:
         cases = [case for case in cases if case["scenario_id"] in set(args.scenario)]
@@ -211,8 +237,9 @@ def main():
         raise ValueError("case manifest selection is empty")
     for case in cases:
         validate_case_scene(case, cfg)
-    output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    if used_default_output:
+        print(f"[BENCHMARK] default output: {output}")
     result_path = output / "results.csv"
     rows = read_results(result_path)
     completed_keys = {(row["policy_id"], row["case_id"]) for row in rows}

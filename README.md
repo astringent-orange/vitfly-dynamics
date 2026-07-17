@@ -184,19 +184,49 @@ flight_speed_7
 - 成功率的95% bootstrap CI。
 - 相同case下模型间的paired difference。
 
+单帧模型：
+
 ```bash
 python3 envtest/benchmark/run_benchmark.py \
   --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
   --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
-  --policy single \
-  --policy adjacent \
-  --policy skip_one \
-  --output results/forest_ablation_v1 \
-  --resume
+  --policy single
+```
 
+相邻双帧模型：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
+  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
+  --policy adjacent
+```
+
+隔一帧双帧模型：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --config envtest/benchmark/configs/forest_benchmark_v1.yaml \
+  --cases envtest/benchmark/manifests/ablation_validation_cases.csv \
+  --policy skip_one
+```
+
+消融实验一次只允许一个 `--policy`。未指定 `--output` 时，结果自动写入带当前时间的目录，例如：
+
+```text
+result/ablation/single_20260717_151230/
+result/ablation/adjacent_20260717_173510/
+result/ablation/skip_one_20260717_195845/
+```
+
+三个模型全部完成后，将下面的时间替换为实际目录名，再合并汇总：
+
+```bash
 python3 envtest/benchmark/summarize_results.py \
-  --results results/forest_ablation_v1/results.csv \
-  --output results/forest_ablation_v1
+  --results result/ablation/single_YYYYMMDD_HHMMSS/results.csv \
+  --results result/ablation/adjacent_YYYYMMDD_HHMMSS/results.csv \
+  --results result/ablation/skip_one_YYYYMMDD_HHMMSS/results.csv \
+  --output result/ablation/summary_YYYYMMDD_HHMMSS
 ```
 
 汇总后生成三张图：
@@ -213,9 +243,9 @@ ablation_flight_speed.png
 
 - `--config`：场景、模型和评价标准配置。
 - `--cases`：本次实验使用的固定 case manifest。
-- `--policy`：需要运行的模型，可重复指定。
-- `--output`：结果目录。
-- `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`。
+- `--policy`：本次运行的模型；消融实验只能指定一个。
+- `--output`：可选。消融实验默认使用 `result/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
+- `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 
 汇总脚本不自动排序或选择模型。结合 `summary.csv`、`paired_model_differences.csv` 和三张图，人工决定用于主对比实验的模型。

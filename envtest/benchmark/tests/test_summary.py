@@ -2,12 +2,14 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from envtest.benchmark.summarize_results import (
     FACTOR_SPECS,
     build_factor_figure,
     paired_comparisons,
     plot_factor_sweeps,
+    read_result_files,
     summarize,
 )
 
@@ -58,6 +60,23 @@ class SummaryTest(unittest.TestCase):
         result = paired_comparisons(rows)[0]
         self.assertEqual(result["paired_total"], 2)
         self.assertEqual(result["success_difference_mean"], 0.0)
+
+    @patch("envtest.benchmark.summarize_results.read_csv")
+    def test_multiple_per_policy_result_files_are_merged(self, mocked_read):
+        mocked_read.side_effect = [
+            [{"policy_id": "single", "case_id": "c1"}],
+            [{"policy_id": "adjacent", "case_id": "c1"}],
+            [{"policy_id": "skip_one", "case_id": "c1"}],
+        ]
+        rows = read_result_files(["single.csv", "adjacent.csv", "skip_one.csv"])
+        self.assertEqual([row["policy_id"] for row in rows], ["single", "adjacent", "skip_one"])
+
+    @patch("envtest.benchmark.summarize_results.read_csv")
+    def test_multiple_result_files_reject_duplicate_rollouts(self, mocked_read):
+        duplicate = {"policy_id": "single", "case_id": "c1"}
+        mocked_read.side_effect = [[duplicate], [duplicate]]
+        with self.assertRaisesRegex(ValueError, "duplicate result"):
+            read_result_files(["first.csv", "second.csv"])
 
     def test_factor_plots_have_expected_axes_ticks_and_policy_lines(self):
         try:

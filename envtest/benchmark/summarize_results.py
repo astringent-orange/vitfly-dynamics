@@ -57,6 +57,20 @@ def read_csv(path):
         return list(csv.DictReader(stream))
 
 
+def read_result_files(paths):
+    """Merge per-policy result files while rejecting duplicate rollouts."""
+    rows = []
+    seen = set()
+    for path in paths:
+        for row in read_csv(path):
+            key = (row["policy_id"], row["case_id"])
+            if key in seen:
+                raise ValueError(f"duplicate result for policy/case: {key[0]} / {key[1]}")
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
 def write_csv(path, fields, rows):
     with open(path, "w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
@@ -231,19 +245,25 @@ def plot_factor_sweeps(summaries, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", required=True)
+    parser.add_argument("--results", action="append", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    result_path = Path(args.results)
+    result_paths = [Path(path) for path in args.results]
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    rows = read_csv(result_path)
+    rows = read_result_files(result_paths)
     summaries = summarize(rows)
     write_csv(output / "summary.csv", SUMMARY_FIELDS, summaries)
     paired = paired_comparisons(rows)
     write_csv(output / "paired_model_differences.csv", PAIRED_FIELDS, paired)
     with open(output / "summary.json", "w") as stream:
-        json.dump({"rows": summaries, "paired_model_differences": paired, "source": str(result_path)}, stream, indent=2)
+        sources = [str(path) for path in result_paths]
+        json.dump({
+            "rows": summaries,
+            "paired_model_differences": paired,
+            "source": sources[0] if len(sources) == 1 else sources,
+            "sources": sources,
+        }, stream, indent=2)
     plot_factor_sweeps(summaries, output)
     print(f"[SUMMARY] wrote {output / 'summary.csv'} groups={len(summaries)}")
 

@@ -50,27 +50,66 @@ cd vitfly-dynamics
 
 ### 3. 放置大型资产（待补充）
 
-> TODO：下载地址、文件名和校验和由维护者在发布资产后补充。
+参考原版项目，发布资产合并为场景、Unity渲染器、预训练模型和训练数据集四个压缩包。百度网盘链接和提取码将在上传完成后补充。
 
-| 资产 | 目标位置 |
-|---|---|
-| Flightmare Unity renderer | `flightmare/flightrender/` |
-| 原始 `trees` 场景 | `flightmare/flightpy/configs/vision/trees/` |
-| 原始 `spheres_medium` 场景 | `flightmare/flightpy/configs/vision/spheres_medium/` |
-| 官方 ViT+LSTM 权重 | `models/ViTLSTM_model.pth` |
-| 单帧模型权重和 `run_metadata.json` | `models/current_frame/` |
-| 相邻双帧模型权重和 `run_metadata.json` | `models/previous_frame/` |
-| 隔一帧双帧模型权重和 `run_metadata.json` | `models/second_previous_frame/` |
-| 训练数据集 | `training/datasets/dataset/` |
+#### 3.1 场景
 
-```bash
-# TODO：将占位符替换为实际资产包路径
-tar -xf <environment-archive.tar> -C flightmare/flightpy/configs/vision
-tar -xf <renderer-archive.tar> -C flightmare/flightrender
-unzip <dataset-archive.zip> -d training/datasets/dataset
+下载 `environments.tar.gz`（TODO：百度网盘链接与提取码）。其中包含：
+
+```text
+spheres_medium/
+trees/
+custom_spheres_medium/
+custom_trees/
+dynamic_astar_medium/
+forest_benchmark_v1/
 ```
 
-新训练的 checkpoint 必须与同一次训练生成的 `run_metadata.json` 放在一起。官方权重通过 legacy adapter 加载，不需要该文件。
+从仓库根目录解压：
+
+```bash
+tar -xzf <path/to/environments.tar.gz> \
+  -C flightmare/flightpy/configs/vision
+```
+
+#### 3.2 Unity渲染器
+
+下载 `flightrender.tar.gz`（TODO：百度网盘链接与提取码），并解压到Flightmare渲染器目录：
+
+```bash
+tar -xzf <path/to/flightrender.tar.gz> \
+  -C flightmare/flightrender
+
+chmod +x flightmare/flightrender/vitfly-unity.x86_64
+```
+
+#### 3.3 预训练模型
+
+下载 `pretrained_models.tar.gz`（TODO：百度网盘链接与提取码）。压缩包包含官方ViT+LSTM以及single、adjacent、skip-one三个模型的最终权重：
+
+```text
+ViTLSTM_model.pth
+current_frame/
+previous_frame/
+second_previous_frame/
+```
+
+解压到模型目录：
+
+```bash
+tar -xzf <path/to/pretrained_models.tar.gz> -C models
+```
+
+三个新训练模型的checkpoint必须与各自训练生成的 `run_metadata.json` 放在同一文件夹。官方权重通过legacy adapter加载，不需要该文件。
+
+#### 3.4 训练数据集
+
+下载 `dataset.tar.gz`（TODO：百度网盘链接与提取码）。压缩包解压后会生成 `training/datasets/dataset/`，其中每个直接子目录是一条accepted轨迹。
+
+```bash
+mkdir -p training/datasets
+tar -xzf <path/to/dataset.tar.gz> -C training/datasets
+```
 
 ### 4. 安装依赖并构建
 
@@ -114,9 +153,9 @@ cd ~/catkin_ws/src/vitfly-dynamics
 
 ### Common preparation
 
-#### 1. 生成森林场景和固定 manifest
+#### 1. 确认森林场景并生成固定 manifest
 
-该步骤要求 `trees/environment_0..19` 已放置完成：
+`environments.tar.gz` 已包含当前森林Benchmark场景。下面的场景生成器会跳过已有目录，只在场景缺失时根据 `trees/environment_0..19` 补充生成；随后重新构建固定manifest：
 
 ```bash
 python3 envtest/benchmark/generate_forest_scenes.py \
@@ -350,7 +389,7 @@ velocity: [vx, vy, vz]
 
 ### 1. 生成动态采集环境
 
-该步骤要求原始 `spheres_medium/environment_0..100` 已放置完成：
+`environments.tar.gz` 已包含当前 `dynamic_astar_medium/environment_0..100`，正常采集时可以跳过本步骤。只有场景缺失或需要重新生成时，才根据 `spheres_medium/environment_0..100` 执行：
 
 ```bash
 python3 envtest/ros/generate_dynamic_astar_env.py \
@@ -361,7 +400,7 @@ python3 envtest/ros/generate_dynamic_astar_env.py \
   --seed 10
 ```
 
-生成器不会覆盖已有目录。如需重新生成，确认旧数据不再需要后增加 `--overwrite`。
+生成器不会覆盖已有目录。如需重新生成，确认旧场景不再需要后增加 `--overwrite`。
 
 ### 2. 采集 expert 轨迹
 

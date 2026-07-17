@@ -150,15 +150,33 @@ bash launch_evaluation.bash 1 vision fixed_env offset=0
 
 ### 4. 运行消融实验
 
-该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型。固定无人机速度为5m/s、森林密度为medium，并设置8个动态障碍物。
+该实验在 validation maps 上使用完全相同的 cases 比较单帧、相邻双帧和隔一帧双帧模型。采用单变量扫描：每次只改变一个因素，另外两个因素保持基准值。
+
+| 扫描因素 | 取值 | 固定条件 |
+|---|---|---|
+| 动态障碍速度 | 1 / 2 / 3m/s | 无人机5m/s、100棵树 |
+| 森林密度 | 50 / 100 / 150棵 | 无人机5m/s、动态障碍2m/s |
+| 无人机速度 | 3 / 5 / 7m/s | 100棵树、动态障碍2m/s |
+
+共同基准为“无人机5m/s、100棵树、动态障碍2m/s”。它只运行一次，并在三组扫描中复用，因此实际使用7个不重复条件：
+
+```text
+baseline
+dynamic_speed_1mps
+dynamic_speed_3mps
+forest_density_low
+forest_density_high
+flight_speed_3
+flight_speed_7
+```
 
 每个模型运行：
 
 ```text
-3个动态障碍速度（1 / 2 / 3m/s）× 10张地图 × 5个phase seed = 150轮
+7个条件 × 10张地图 × 5个phase seed = 350轮
 ```
 
-三个模型合计 **450轮**。汇总指标包括：
+三个模型合计 **1050轮**。汇总指标包括：
 
 - 成功率：到达终点且全程零碰撞的rollout比例。
 - 碰撞率：至少发生一次碰撞的rollout比例。
@@ -181,6 +199,16 @@ python3 envtest/benchmark/summarize_results.py \
   --output results/forest_ablation_v1
 ```
 
+汇总后生成三张图：
+
+```text
+ablation_dynamic_speed.png
+ablation_forest_density.png
+ablation_flight_speed.png
+```
+
+每张图的横轴是对应因素的三个取值，三条曲线对应 `single`、`adjacent` 和 `skip_one`。图中从上到下依次为带95% bootstrap CI的成功率、碰撞率和成功rollout的中位飞行时间；没有成功rollout时，飞行时间点留空。
+
 主要参数：
 
 - `--config`：场景、模型和评价标准配置。
@@ -190,7 +218,7 @@ python3 envtest/benchmark/summarize_results.py \
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 
-汇总脚本只生成 `summary.csv`、`summary.json`、paired comparison和图表，不自动排序或选择模型。根据这些结果人工决定用于主对比实验的模型。
+汇总脚本不自动排序或选择模型。结合 `summary.csv`、`paired_model_differences.csv` 和三张图，人工决定用于主对比实验的模型。
 
 ### 5. 运行主对比实验
 

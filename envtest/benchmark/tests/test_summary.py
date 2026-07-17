@@ -1,10 +1,43 @@
-import csv
+import math
+import tempfile
 import unittest
+from pathlib import Path
 
-from envtest.benchmark.summarize_results import paired_comparisons, summarize
+from envtest.benchmark.summarize_results import (
+    FACTOR_SPECS,
+    build_factor_figure,
+    paired_comparisons,
+    plot_factor_sweeps,
+    summarize,
+)
 
 
 class SummaryTest(unittest.TestCase):
+    def synthetic_summaries(self):
+        rows = []
+        scenarios = {
+            scenario
+            for spec in FACTOR_SPECS
+            for scenario in spec["scenarios"]
+        }
+        for policy_index, policy in enumerate(("single", "adjacent", "skip_one")):
+            for scenario_index, scenario in enumerate(sorted(scenarios)):
+                success_rate = 0.6 + policy_index * 0.05 - scenario_index * 0.01
+                rows.append({
+                    "policy_id": policy,
+                    "scenario_id": scenario,
+                    "total": 50,
+                    "success_count": round(success_rate * 50),
+                    "success_rate": success_rate,
+                    "collision_count": round((1.0 - success_rate) * 50),
+                    "collision_rate": 1.0 - success_rate,
+                    "successful_time_mean": 12.0 + scenario_index,
+                    "successful_time_median": 11.5 + scenario_index,
+                    "success_ci_low": max(0.0, success_rate - 0.08),
+                    "success_ci_high": min(1.0, success_rate + 0.08),
+                })
+        return rows
+
     def test_summary_counts(self):
         rows = [
             {"policy_id": "single", "scenario_id": "dynamic_speed_2mps", "success": "1", "collision": "0", "flight_time": "10"},
@@ -25,6 +58,50 @@ class SummaryTest(unittest.TestCase):
         result = paired_comparisons(rows)[0]
         self.assertEqual(result["paired_total"], 2)
         self.assertEqual(result["success_difference_mean"], 0.0)
+
+    def test_factor_plots_have_expected_axes_ticks_and_policy_lines(self):
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            self.skipTest("matplotlib is not installed")
+
+        summaries = self.synthetic_summaries()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            plot_factor_sweeps(summaries, output)
+            self.assertEqual(
+                {path.name for path in output.glob("*.png")},
+                {spec["filename"] for spec in FACTOR_SPECS},
+            )
+
+        for spec in FACTOR_SPECS:
+            figure, axes = build_factor_figure(summaries, spec)
+            self.assertEqual(len(axes), 3)
+            self.assertEqual(list(axes[2].get_xticks()), list(spec["x_values"]))
+            self.assertEqual(len(axes[0].get_legend_handles_labels()[1]), 3)
+            self.assertEqual(len(axes[1].lines), 3)
+            self.assertEqual(len(axes[2].lines), 3)
+            plt.close(figure)
+
+    def test_missing_successful_time_is_an_empty_plot_point(self):
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            self.skipTest("matplotlib is not installed")
+
+        summaries = self.synthetic_summaries()
+        target = next(
+            row for row in summaries
+            if row["policy_id"] == "single" and row["scenario_id"] == "dynamic_speed_1mps"
+        )
+        target["successful_time_median"] = ""
+        figure, axes = build_factor_figure(summaries, FACTOR_SPECS[0])
+        self.assertTrue(math.isnan(axes[2].lines[0].get_ydata()[0]))
+        plt.close(figure)
 
 
 if __name__ == "__main__":

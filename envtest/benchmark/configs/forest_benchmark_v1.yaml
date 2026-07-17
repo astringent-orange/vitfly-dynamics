@@ -63,18 +63,46 @@ evaluation_profiles:
     plots: false
 
 design:
+  conditions:
+    baseline:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+    dynamic_speed_1mps:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_1mps
+    dynamic_speed_3mps:
+      desired_speed: 5.0
+      density: medium
+      dynamic_profile: dynamic_speed_3mps
+    forest_density_low:
+      desired_speed: 5.0
+      density: low
+      dynamic_profile: dynamic_speed_2mps
+    forest_density_high:
+      desired_speed: 5.0
+      density: high
+      dynamic_profile: dynamic_speed_2mps
+    flight_speed_3:
+      desired_speed: 3.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+    flight_speed_7:
+      desired_speed: 7.0
+      density: medium
+      dynamic_profile: dynamic_speed_2mps
+  single_factor_scenarios:
+    - baseline
+    - dynamic_speed_1mps
+    - dynamic_speed_3mps
+    - forest_density_low
+    - forest_density_high
+    - flight_speed_3
+    - flight_speed_7
   ablation_validation:
     split: validation
-    speed: 5.0
-    density: medium
-    dynamic_profiles: [dynamic_speed_1mps, dynamic_speed_2mps, dynamic_speed_3mps]
+    scenario_set: single_factor_scenarios
   comparison_test:
     split: test
-    scenarios:
-      - baseline
-      - flight_speed_3
-      - flight_speed_7
-      - forest_density_low
-      - forest_density_high
-      - dynamic_speed_1mps
-      - dynamic_speed_3mps
+    scenario_set: single_factor_scenarios

@@ -125,20 +125,33 @@ def build(cfg):
     test = scenario["map_ids"]["test"]
     val_phases = scenario["phase_seeds"]["validation"]
     test_phases = scenario["phase_seeds"]["test"]
-    ablation_entries = [
-        (profile, 5.0, "medium", profile)
-        for profile in cfg["design"]["ablation_validation"]["dynamic_profiles"]
-    ]
-    comparison_entries = [
-        ("baseline", 5.0, "medium", "dynamic_speed_2mps"),
-        ("flight_speed_3", 3.0, "medium", "dynamic_speed_2mps"),
-        ("flight_speed_7", 7.0, "medium", "dynamic_speed_2mps"),
-        ("forest_density_low", 5.0, "low", "dynamic_speed_2mps"),
-        ("forest_density_high", 5.0, "high", "dynamic_speed_2mps"),
-        ("dynamic_speed_1mps", 5.0, "medium", "dynamic_speed_1mps"),
-        ("dynamic_speed_3mps", 5.0, "medium", "dynamic_speed_3mps"),
-    ]
-    return scene_rows, cases_for("validation", validation, val_phases, ablation_entries), cases_for("test", test, test_phases, comparison_entries)
+    design = cfg["design"]
+    conditions = design["conditions"]
+    def entries_for(experiment):
+        scenario_set = experiment["scenario_set"]
+        if scenario_set not in design:
+            raise ValueError(f"undefined scenario set: {scenario_set}")
+        entries = []
+        for scenario_id in design[scenario_set]:
+            if scenario_id not in conditions:
+                raise ValueError(f"undefined benchmark condition: {scenario_id}")
+            condition = conditions[scenario_id]
+            density = condition["density"]
+            profile = condition["dynamic_profile"]
+            if density not in scenario["density_counts"]:
+                raise ValueError(f"unknown density for {scenario_id}: {density}")
+            if profile not in profiles:
+                raise ValueError(f"unknown dynamic profile for {scenario_id}: {profile}")
+            entries.append((scenario_id, float(condition["desired_speed"]), density, profile))
+        return entries
+
+    ablation_entries = entries_for(design["ablation_validation"])
+    comparison_entries = entries_for(design["comparison_test"])
+    return (
+        scene_rows,
+        cases_for("validation", validation, val_phases, ablation_entries),
+        cases_for("test", test, test_phases, comparison_entries),
+    )
 
 
 def main():

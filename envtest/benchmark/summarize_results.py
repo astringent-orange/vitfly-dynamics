@@ -8,6 +8,9 @@ import random
 import statistics
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+ABLATION_RESULTS_ROOT = ROOT / "results" / "ablation"
+DEFAULT_TABLE_OUTPUT = ABLATION_RESULTS_ROOT / "table"
 SUMMARY_FIELDS = [
     "policy_id", "scenario_id", "total", "success_count", "success_rate",
     "collision_count", "collision_rate", "successful_time_mean",
@@ -69,6 +72,17 @@ def read_result_files(paths):
             seen.add(key)
             rows.append(row)
     return rows
+
+
+def latest_policy_result_paths(root=ABLATION_RESULTS_ROOT):
+    """Find the most recently modified result file for every ablation policy."""
+    paths = []
+    for policy in POLICY_ORDER:
+        candidates = [path for path in Path(root).glob(f"{policy}_*/results.csv") if path.is_file()]
+        if not candidates:
+            raise FileNotFoundError(f"no ablation results found for {policy} under {root}")
+        paths.append(max(candidates, key=lambda path: (path.stat().st_mtime_ns, str(path))))
+    return paths
 
 
 def write_csv(path, fields, rows):
@@ -243,14 +257,25 @@ def plot_factor_sweeps(summaries, output):
         plt.close(fig)
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", action="append", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--results", action="append", help="Result CSV; repeat to merge multiple policies")
+    parser.add_argument("--output", default=DEFAULT_TABLE_OUTPUT)
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
-    result_paths = [Path(path) for path in args.results]
+    result_paths = (
+        [Path(path) for path in args.results]
+        if args.results
+        else latest_policy_result_paths()
+    )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    for path in result_paths:
+        print(f"[SUMMARY] source: {path}")
     rows = read_result_files(result_paths)
     summaries = summarize(rows)
     write_csv(output / "summary.csv", SUMMARY_FIELDS, summaries)

@@ -1,12 +1,16 @@
 import math
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from envtest.benchmark.summarize_results import (
+    DEFAULT_TABLE_OUTPUT,
     FACTOR_SPECS,
+    build_parser as build_summary_parser,
     build_factor_figure,
+    latest_policy_result_paths,
     paired_comparisons,
     plot_factor_sweeps,
     read_result_files,
@@ -15,6 +19,26 @@ from envtest.benchmark.summarize_results import (
 
 
 class SummaryTest(unittest.TestCase):
+    def test_summary_defaults_to_latest_policy_results_and_table_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = []
+            for index, policy in enumerate(("single", "adjacent", "skip_one")):
+                old = root / f"{policy}_old" / "results.csv"
+                new = root / f"{policy}_new" / "results.csv"
+                old.parent.mkdir()
+                new.parent.mkdir()
+                old.write_text("old")
+                new.write_text("new")
+                os.utime(old, (100 + index, 100 + index))
+                os.utime(new, (200 + index, 200 + index))
+                expected.append(new)
+            self.assertEqual(latest_policy_result_paths(root), expected)
+
+        args = build_summary_parser().parse_args([])
+        self.assertIsNone(args.results)
+        self.assertEqual(args.output, DEFAULT_TABLE_OUTPUT)
+
     def synthetic_summaries(self):
         rows = []
         scenarios = {

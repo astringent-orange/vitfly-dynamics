@@ -23,6 +23,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "envtest" / "benchmark" / "configs" / "forest_benchmark_v1.yaml"
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "ablation_validation_cases.csv"
+DEFAULT_ABLATION_OUTPUT = ROOT / "results" / "ablation"
 RESULT_FIELDS = [
     "experiment_id", "case_id", "policy_id", "checkpoint_sha256", "scenario_id",
     "map_id", "desired_speed", "forest_density", "tree_count", "dynamic_profile",
@@ -135,7 +136,7 @@ def resolve_output_path(cases_path, policies, requested_output=None, now=None):
         raise ValueError("--output is required outside an ablation run")
     current = now or datetime.now()
     timestamp = current.strftime("%Y%m%d_%H%M%S")
-    return Path("result") / "ablation" / f"{policies[0]['id']}_{timestamp}", True
+    return DEFAULT_ABLATION_OUTPUT / f"{policies[0]['id']}_{timestamp}", True
 
 
 def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):

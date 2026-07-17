@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime
 
 from envtest.benchmark.run_benchmark import (
+    DEFAULT_ABLATION_OUTPUT,
     DEFAULT_CASES,
     DEFAULT_CONFIG,
     build_parser,
@@ -21,7 +22,7 @@ class RunnerTest(unittest.TestCase):
             [{"id": "single"}],
             now=datetime(2026, 7, 17, 15, 12, 30),
         )
-        self.assertEqual(str(output), "result/ablation/single_20260717_151230")
+        self.assertEqual(output, DEFAULT_ABLATION_OUTPUT / "single_20260717_151230")
         self.assertTrue(used_default)
 
     def test_ablation_rejects_multiple_models(self):
@@ -35,9 +36,9 @@ class RunnerTest(unittest.TestCase):
         output, used_default = resolve_output_path(
             "ablation_validation_cases.csv",
             [{"id": "skip_one"}],
-            requested_output="result/ablation/resume_skip_one",
+            requested_output="results/ablation/resume_skip_one",
         )
-        self.assertEqual(str(output), "result/ablation/resume_skip_one")
+        self.assertEqual(str(output), "results/ablation/resume_skip_one")
         self.assertFalse(used_default)
 
 

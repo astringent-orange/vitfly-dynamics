@@ -4,4 +4,4 @@ checklist.md
 *.dat
 *.code-workspace
 envtest/ros/train_set/
-result/
+results/

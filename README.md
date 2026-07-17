@@ -208,20 +208,18 @@ python3 envtest/benchmark/run_benchmark.py \
 `--config` 默认使用 `envtest/benchmark/configs/forest_benchmark_v1.yaml`，`--cases` 默认使用 `envtest/benchmark/manifests/ablation_validation_cases.csv`，需要测试其他配置或manifest时仍可显式覆盖。消融实验一次只允许一个 `--policy`。未指定 `--output` 时，结果自动写入带当前时间的目录，例如：
 
 ```text
-result/ablation/single_20260717_151230/
-result/ablation/adjacent_20260717_173510/
-result/ablation/skip_one_20260717_195845/
+results/ablation/single_20260717_151230/
+results/ablation/adjacent_20260717_173510/
+results/ablation/skip_one_20260717_195845/
 ```
 
-三个模型全部完成后，将下面的时间替换为实际目录名，再合并汇总：
+三个模型全部完成后直接运行：
 
 ```bash
-python3 envtest/benchmark/summarize_results.py \
-  --results result/ablation/single_YYYYMMDD_HHMMSS/results.csv \
-  --results result/ablation/adjacent_YYYYMMDD_HHMMSS/results.csv \
-  --results result/ablation/skip_one_YYYYMMDD_HHMMSS/results.csv \
-  --output result/ablation/summary_YYYYMMDD_HHMMSS
+python3 envtest/benchmark/summarize_results.py
 ```
+
+汇总脚本自动选择三个模型各自最新修改的 `results.csv`。汇总表格和图像固定写入 `results/ablation/table/`，再次运行会覆盖上一次的汇总结果。需要汇总指定批次时，仍可显式传入多个 `--results` 和一个 `--output`。
 
 汇总后生成三张图：
 
@@ -238,7 +236,7 @@ ablation_flight_speed.png
 - `--config`：场景、模型和评价标准配置，默认使用森林Benchmark配置。
 - `--cases`：本次实验使用的固定 case manifest，默认使用消融validation manifest。
 - `--policy`：本次运行的模型；消融实验只能指定一个。
-- `--output`：可选。消融实验默认使用 `result/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
+- `--output`：可选。消融实验默认使用 `results/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 

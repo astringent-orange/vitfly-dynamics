@@ -48,67 +48,41 @@ git clone --branch code-release --single-branch \
 cd vitfly-dynamics
 ```
 
-### 3. 放置大型资产（待补充）
-
-参考原版项目，发布资产合并为场景、Unity渲染器、预训练模型和训练数据集四个压缩包。百度网盘链接和提取码将在上传完成后补充。
+### 3. 放置大型资产
 
 #### 3.1 场景
 
-下载 `environments.tar.gz`（TODO：百度网盘链接与提取码）。其中包含：
-
-```text
-spheres_medium/
-trees/
-custom_spheres_medium/
-custom_trees/
-dynamic_astar_medium/
-forest_benchmark_v1/
-```
-
-从仓库根目录解压：
+下载 [`environments.tar.xz`](https://pan.baidu.com/s/14q8FcqlNW3rIg7haxARpHw?pwd=9527)（提取码：`9527`），从仓库根目录解压：
 
 ```bash
-tar -xzf <path/to/environments.tar.gz> \
+tar -xJf <path/to/environments.tar.xz> \
   -C flightmare/flightpy/configs/vision
 ```
 
 #### 3.2 Unity渲染器
 
-下载 `flightrender.tar.gz`（TODO：百度网盘链接与提取码），并解压到Flightmare渲染器目录：
+下载 [`flightrender.tar.xz`](https://pan.baidu.com/s/19u9rlteO3mBndggyONYz7A?pwd=9527)（提取码：`9527`），从仓库根目录解压：
 
 ```bash
-tar -xzf <path/to/flightrender.tar.gz> \
+tar -xJf <path/to/flightrender.tar.xz> \
   -C flightmare/flightrender
-
-chmod +x flightmare/flightrender/vitfly-unity.x86_64
 ```
 
 #### 3.3 预训练模型
 
-下载 `pretrained_models.tar.gz`（TODO：百度网盘链接与提取码）。压缩包包含官方ViT+LSTM以及single、adjacent、skip-one三个模型的最终权重：
-
-```text
-ViTLSTM_model.pth
-current_frame/
-previous_frame/
-second_previous_frame/
-```
-
-解压到模型目录：
+下载 [`pretrained_models.tar.xz`](https://pan.baidu.com/s/13EyXOon9YnWpx5HPMuTMmw?pwd=9527)（提取码：`9527`），从仓库根目录解压：
 
 ```bash
-tar -xzf <path/to/pretrained_models.tar.gz> -C models
+tar -xJf <path/to/pretrained_models.tar.xz> -C models
 ```
-
-三个新训练模型的checkpoint必须与各自训练生成的 `run_metadata.json` 放在同一文件夹。官方权重通过legacy adapter加载，不需要该文件。
 
 #### 3.4 训练数据集
 
-下载 `dataset.tar.gz`（TODO：百度网盘链接与提取码）。压缩包解压后会生成 `training/datasets/dataset/`，其中每个直接子目录是一条accepted轨迹。
+下载 [`dataset.tar.xz`](https://pan.baidu.com/s/17TVpN4KkvG-Y7gJA54uheg?pwd=9527)（提取码：`9527`），从仓库根目录解压：
 
 ```bash
 mkdir -p training/datasets
-tar -xzf <path/to/dataset.tar.gz> -C training/datasets
+tar -xJf <path/to/dataset.tar.xz> -C training/datasets
 ```
 
 ### 4. 安装依赖并构建
@@ -135,7 +109,7 @@ pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 ```
 
-每次开始工作时执行：
+每次开始工作前执行：
 
 ```bash
 conda activate pubflight
@@ -143,9 +117,6 @@ source ~/catkin_ws/devel/setup.bash
 cd ~/catkin_ws/src/vitfly-dynamics
 ```
 
-`devel/setup.bash` 已记录工作空间的 ROS Noetic underlay，因此会同时加载 `/opt/ros/noetic`，不需要在每个新终端重复执行两条 `source`。如果当前终端已经加载过工作空间，也不需要再次执行；只有尚未构建工作空间或无法找到 ROS 命令时，才单独执行 `source /opt/ros/noetic/setup.bash`。
-
-从仓库根目录运行 `launch_evaluation.bash` 时，脚本会自动使用当前仓库中的 `flightmare/`，无需手动设置 `FLIGHTMARE_PATH`。
 
 ## Test (simulation)
 
@@ -155,7 +126,7 @@ cd ~/catkin_ws/src/vitfly-dynamics
 
 #### 1. 确认森林场景并生成固定 manifest
 
-`environments.tar.gz` 已包含当前森林Benchmark场景。下面的场景生成器会跳过已有目录，只在场景缺失时根据 `trees/environment_0..19` 补充生成；随后重新构建固定manifest：
+`environments.tar.xz` 已包含当前森林Benchmark场景。下面的场景生成器会跳过已有目录，只在场景缺失时根据 `trees/environment_0..19` 补充生成；随后重新构建固定manifest：
 
 ```bash
 python3 envtest/benchmark/generate_forest_scenes.py \
@@ -389,7 +360,7 @@ velocity: [vx, vy, vz]
 
 ### 1. 生成动态采集环境
 
-`environments.tar.gz` 已包含当前 `dynamic_astar_medium/environment_0..100`，正常采集时可以跳过本步骤。只有场景缺失或需要重新生成时，才根据 `spheres_medium/environment_0..100` 执行：
+`environments.tar.xz` 已包含当前 `dynamic_astar_medium/environment_0..100`，正常采集时可以跳过本步骤。只有场景缺失或需要重新生成时，才根据 `spheres_medium/environment_0..100` 执行：
 
 ```bash
 python3 envtest/ros/generate_dynamic_astar_env.py \
@@ -410,25 +381,20 @@ bash launch_evaluation.bash 10 state
 
 `10` 是本批次轨迹数，可按需要修改。采集结果写入 `envtest/ros/train_set/`。每批结束后脚本会自动删除 rejected 轨迹，并更新 `collection_summary.json`。
 
-### 3. 校验数据
+### Reject 轨迹的判定
 
-```bash
-PYTHONPATH=envtest/ros python3 envtest/ros/validate_dataset.py \
-  envtest/ros/train_set \
-  --require-env-fields \
-  --require-multiple-envs
-```
+每个 state rollout 结束后会自动执行筛选；不需要再手动运行校验脚本。以下任一情况都会使该轨迹被删除：
 
-### 4. 转移 accepted 轨迹
+- evaluator 未报告成功，或发生任意一次碰撞；
+- 缺少 `data.csv`、深度图、必需字段或环境字段，时间戳重复，深度图无效，或 CSV 行数与深度图数量不一致；
+- A* 路径缓存缺失、整条轨迹没有成功的 A* 样本、轨迹越过终点后仍被记录，或实际速度指令出现反向分量；
+- 发生碰撞但障碍物间距仍记录为非负值，或任一记录的最近障碍物间距小于 `0 m`；
+- 实际沿 A* 路径连续倒退超过 `0.75 m`，或偏离路径超过 `1.5 m`；
+- 候选速度、制动、避障和减速诊断字段缺失、非有限或互相矛盾，例如速度不在 `[0, desired_vel]`、紧急停车标记不正确、连续超过 2 帧在存在安全候选速度时仍无故保持零速，或速度变化超过 `3.5 m/s²`。
 
-```bash
-mkdir -p training/datasets/dataset
-find envtest/ros/train_set \
-  -mindepth 1 -maxdepth 1 -type d \
-  -exec cp -a {} training/datasets/dataset/ \;
-```
+采集器还会报告但不会删除的质量告警：低速帧占比超过 15%、沿路径反向速度帧占比超过 2%、连续倒退超过 `0.3 m` 或偏离路径超过 `0.8 m`。这些告警保留在终端输出中，便于后续人工检查。
 
-只复制轨迹目录，不复制 `collection_summary.json`。
+`collection_summary.json` 仅记录累计的 accepted/rejected 数量，不参与训练。
 
 ## Train
 

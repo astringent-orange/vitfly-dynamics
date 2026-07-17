@@ -148,7 +148,7 @@ def resolve_output_path(cases_path, policies, requested_output=None, now=None):
     return DEFAULT_ABLATION_OUTPUT / f"{policies[0]['id']}_{timestamp}", True
 
 
-def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):
+def run_one(cfg, policy, case, output, runner_timeout=420.0):
     evaluation_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__evaluation.yaml"
     env = os.environ.copy()
     env.update(policy_environment(policy))
@@ -173,13 +173,6 @@ def run_one(cfg, policy, case, output, dry_run=False, runner_timeout=420.0):
     })
     command = ["bash", "launch_evaluation.bash", "1", "vision", "fixed_env"]
     print(f"[BENCHMARK] {policy['id']} {case['case_id']}")
-    if dry_run:
-        print("[BENCHMARK] command:", " ".join(command))
-        return {
-            "goal_reached": "", "success": "", "collision": "", "collision_count": "",
-            "flight_time": "", "termination_elapsed_time": "", "termination_reason": "dry_run",
-            "runner_returncode": 0,
-        }
     process = subprocess.Popen(
         command,
         cwd=ROOT,
@@ -225,7 +218,6 @@ def build_parser():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; defaults to a timestamped directory for ablation runs")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
     return parser
 
@@ -284,7 +276,6 @@ def main(argv=None):
                 continue
             result = run_one(
                 cfg, policy, case, output,
-                dry_run=args.dry_run,
                 runner_timeout=args.runner_timeout,
             )
             now = datetime.now(timezone.utc).isoformat()

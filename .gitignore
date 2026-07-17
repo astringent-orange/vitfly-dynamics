@@ -15,6 +15,13 @@ envtest/ros/summary.yaml
 evaluation.yaml
 results/
 
+# External release archives
+/environments.tar.xz
+/flightrender.tar.xz
+/pretrained_models.tar.xz
+/dataset.tar.xz
+/*.tar.xz.partial
+
 # Downloaded or generated simulation assets
 flightmare/flightrender/
 flightmare/flightpy/configs/vision/dynamic_astar_medium/

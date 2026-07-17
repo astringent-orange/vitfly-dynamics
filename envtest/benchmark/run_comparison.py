@@ -61,7 +61,6 @@ def build_parser():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; timestamped under results/comparison by default")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
     return parser
 
@@ -92,8 +91,6 @@ def main(argv=None):
         benchmark_args.extend(("--limit", str(args.limit)))
     if args.resume:
         benchmark_args.append("--resume")
-    if args.dry_run:
-        benchmark_args.append("--dry-run")
     run_benchmark_main(benchmark_args)
 
 

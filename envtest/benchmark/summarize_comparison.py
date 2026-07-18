@@ -11,6 +11,7 @@ try:
         latest_named_result_paths,
         read_csv,
         read_result_files,
+        validate_result_integrity,
         write_summary_outputs,
     )
 except ImportError:
@@ -20,6 +21,7 @@ except ImportError:
         latest_named_result_paths,
         read_csv,
         read_result_files,
+        validate_result_integrity,
         write_summary_outputs,
     )
 
@@ -45,18 +47,12 @@ def latest_comparison_result_paths(root=COMPARISON_RESULTS_ROOT):
 def validate_comparison_coverage(rows, expected_case_ids=None):
     """Require all four policies to contain the same complete immutable case set."""
     expected = set(expected_case_ids or (row["case_id"] for row in read_csv(DEFAULT_CASES)))
-    by_policy = {policy: set() for policy in COMPARISON_POLICY_ORDER}
-    for row in rows:
-        if row["policy_id"] in by_policy:
-            by_policy[row["policy_id"]].add(row["case_id"])
-    for policy, actual in by_policy.items():
-        if actual != expected:
-            missing = len(expected - actual)
-            extra = len(actual - expected)
-            raise ValueError(
-                f"incomplete comparison results for {policy}: "
-                f"{len(actual)}/{len(expected)} cases, missing={missing}, extra={extra}"
-            )
+    try:
+        validate_result_integrity(rows, expected, COMPARISON_POLICY_ORDER)
+    except ValueError as error:
+        if str(error).startswith("incomplete results"):
+            raise ValueError(str(error).replace("incomplete results", "incomplete comparison results", 1)) from error
+        raise
 
 
 def build_parser():

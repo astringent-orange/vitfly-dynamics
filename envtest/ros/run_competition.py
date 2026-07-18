@@ -223,6 +223,36 @@ class AgilePilotNode:
         self.depth_im_threshold = 0.09
 
         self.curr_cmd = None
+        self.ctr = 0
+        self.keyboard_input = ''
+        self.got_keypress = 0.0
+        self.rgb_img = None
+        self.save_rgb_debug = False
+        self.debug_rgb_folder = None
+
+        # Publishers and all callback-visible state must exist before any
+        # subscriber is created: rospy may invoke a callback immediately from
+        # a live Flightmare topic during Subscriber construction.
+        self.cmd_pub = rospy.Publisher(
+            "/" + quad_name + "/dodgeros_pilot/feedthrough_command",
+            Command,
+            queue_size=1,
+        )
+        self.linvel_pub = rospy.Publisher(
+            "/" + quad_name + "/dodgeros_pilot/velocity_command",
+            TwistStamped,
+            queue_size=1,
+        )
+        self.debug_img1_pub = rospy.Publisher(
+            "/debug_img1",
+            Image,
+            queue_size=1,
+        )
+        self.debug_img2_pub = rospy.Publisher(
+            "/debug_img2",
+            Image,
+            queue_size=1,
+        )
 
         # Logic subscribers
         self.start_sub = rospy.Subscriber(
@@ -292,36 +322,7 @@ class AgilePilotNode:
         )
 
 
-        # Command publishers
-        self.cmd_pub = rospy.Publisher(
-            "/" + quad_name + "/dodgeros_pilot/feedthrough_command",
-            Command,
-            queue_size=1,
-        )
-        self.linvel_pub = rospy.Publisher(
-            "/" + quad_name + "/dodgeros_pilot/velocity_command",
-            TwistStamped,
-            queue_size=1,
-        )
-        self.debug_img1_pub = rospy.Publisher(
-            "/debug_img1",
-            Image,
-            queue_size=1,
-        )
-        self.debug_img2_pub = rospy.Publisher(
-            "/debug_img2",
-            Image,
-            queue_size=1,
-        )
         print("[RUN_COMPETITION] Initialization completed!")
-
-        self.ctr = 0
-
-        self.keyboard_input = ''
-        self.got_keypress = 0.0
-        self.rgb_img = None
-        self.save_rgb_debug = False
-        self.debug_rgb_folder = None
     def rgb_callback(self, img):
         self.rgb_img = self.cv_bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 

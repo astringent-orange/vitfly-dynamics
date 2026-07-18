@@ -33,12 +33,14 @@ class Evaluator:
         self.bounding_box = np.reshape(np.array(bounds, dtype=float), (3, 2)).T
         self.start_x = float(os.environ.get("VITFLY_EVAL_START_X", "0.5"))
 
-        self._initSubscribers(config["topics"])
-        self._initPublishers(config["topics"])
-
         self.start_time_mark = False
         self.goal_reached = False
         self.termination_reason = None
+
+        # The finish publisher and callback state must be ready before live
+        # simulator topics can invoke any subscriber callback.
+        self._initPublishers(config["topics"])
+        self._initSubscribers(config["topics"])
 
     def _initSubscribers(self, config):
         self.state_sub = rospy.Subscriber(
@@ -74,8 +76,14 @@ class Evaluator:
         )
 
     def publishFinish(self):
-        self.finish_pub.publish()
+        # Persist the evaluator result before asking the controller to stop.
+        # Otherwise the launcher can observe the controller exit first and
+        # overwrite a successful rollout with controller_error.
         self.printSummary()
+        self.finish_pub.publish()
+        if self.config["plots"]:
+            self.printPlots()
+        rospy.signal_shutdown("Completed Evaluation")
 
     def callbackState(self, msg):
 
@@ -106,6 +114,7 @@ class Evaluator:
             self.goal_reached = True
             self.is_active = False
             self.publishFinish()
+            return
 
         if rospy.get_time() - self.time_array[0] > self.timeout:
             self.abortRun()
@@ -144,6 +153,7 @@ class Evaluator:
 
     def abortRun(self):
         print("You did not reach the goal!")
+        self.is_active = False
         summary = {}
         summary["Success"] = False
         summary["goal_reached"] = bool(self.goal_reached)
@@ -152,14 +162,19 @@ class Evaluator:
         summary["termination_reason"] = self.termination_reason or ("collision" if self.crash else "timeout")
         if self.time_array[0] == self.time_array[0]:
             summary["termination_elapsed_time"] = rospy.get_time() - self.time_array[0]
-        with open("summary.yaml", "w") as f:
-            if os.getenv("ROLLOUT_NAME") is not None:
-                tmp = {}
-                tmp[os.getenv("ROLLOUT_NAME")] = summary
-                yaml.safe_dump(tmp, f)
-            else:
-                yaml.safe_dump(summary, f)
+        self.writeSummary(summary)
         rospy.signal_shutdown("Completed Evaluation")
+
+    def writeSummary(self, summary):
+        payload = summary
+        if os.getenv("ROLLOUT_NAME") is not None:
+            payload = {os.getenv("ROLLOUT_NAME"): summary}
+        temporary_path = ".summary.yaml.tmp"
+        with open(temporary_path, "w") as stream:
+            yaml.safe_dump(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, "summary.yaml")
 
     def printSummary(self):
         
@@ -181,18 +196,9 @@ class Evaluator:
         summary["number_crashes"] = self.crash
         summary["collision_count"] = self.crash
         summary["termination_elapsed_time"] = ttf
-        with open("summary.yaml", "w") as f:
-            if os.getenv("ROLLOUT_NAME") is not None:
-                tmp = {}
-                tmp[os.getenv("ROLLOUT_NAME")] = summary
-                yaml.safe_dump(tmp, f)
-            else:
-                yaml.safe_dump(summary, f)
+        self.writeSummary(summary)
 
-        if not self.config["plots"]:
-            rospy.signal_shutdown("Completed Evaluation")
-            return
-
+    def printPlots(self):
         print("Here is a plot of your trajectory in the xy plane")
         pos = np.array(self.pos)
         plot(xs=pos[:, 1], ys=pos[:, 2], color=True)
@@ -206,8 +212,6 @@ class Evaluator:
         print("Here is a plot of the distance to the closest obstacles")
         dist = np.array(self.dist)
         plot(xs=dist[:, 0] - self.time_array[0], ys=dist[:, 1], color=True)
-
-        rospy.signal_shutdown("Completed Evaluation")
 
 
 if __name__ == "__main__":

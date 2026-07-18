@@ -450,6 +450,25 @@ termination_reason: $failure_reason
 EOF
 }
 
+summary_file_complete() {
+  [ -s ./envtest/ros/summary.yaml ] && \
+    grep -q "termination_reason:" ./envtest/ros/summary.yaml
+}
+
+wait_for_evaluator_result() {
+  timeout_s="${1:-5}"
+  start_wait=$(date +%s)
+  while (($(date +%s) - start_wait < timeout_s))
+  do
+    if summary_file_complete
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 simulator_error_exit() {
   if [ "$benchmark_mode" = "1" ]
   then
@@ -562,6 +581,7 @@ do
   export ROLLOUT_NAME="rollout_""$i"
   echo "$ROLLOUT_NAME"
 
+  rm -f ./envtest/ros/summary.yaml ./envtest/ros/.summary.yaml.tmp
   cd ./envtest/ros/
   python3 evaluation_node.py ${datetime}_N$i &
   PY_PID="$!"
@@ -589,6 +609,12 @@ do
     fi
     if ! ps -p $COMP_PID > /dev/null
     then
+      echo "[LAUNCH_EVALUATION] Controller exited; waiting for evaluator result."
+      if wait_for_evaluator_result 5
+      then
+        echo "[LAUNCH_EVALUATION] Evaluator result is complete; treating controller exit as normal shutdown."
+        break
+      fi
       echo "[LAUNCH_EVALUATION] Controller exited before evaluator completed."
       batch_failed=1
       stop_evaluator

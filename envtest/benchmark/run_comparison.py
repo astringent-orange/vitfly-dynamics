@@ -58,6 +58,7 @@ def build_parser():
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="Benchmark configuration")
     parser.add_argument("--cases", default=DEFAULT_CASES, help="Immutable comparison manifest")
     parser.add_argument("--scenario", action="append", default=[])
+    parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; timestamped under results/comparison by default")
     parser.add_argument("--resume", action="store_true")
@@ -89,6 +90,8 @@ def main(argv=None):
     ]
     for scenario in args.scenario:
         benchmark_args.extend(("--scenario", scenario))
+    for case_id in args.case_id:
+        benchmark_args.extend(("--case-id", case_id))
     if args.limit is not None:
         benchmark_args.extend(("--limit", str(args.limit)))
     if args.resume:

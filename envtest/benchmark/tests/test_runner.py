@@ -25,6 +25,15 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(args.config, DEFAULT_CONFIG)
         self.assertEqual(args.cases, DEFAULT_CASES)
         self.assertEqual(args.simulator_retries, 1)
+        self.assertEqual(args.case_id, [])
+
+    def test_exact_case_filter_is_repeatable(self):
+        args = build_parser().parse_args([
+            "--policy", "single",
+            "--case-id", "c1",
+            "--case-id", "c2",
+        ])
+        self.assertEqual(args.case_id, ["c1", "c2"])
 
     def test_ablation_uses_policy_and_timestamp_as_default_output(self):
         output, used_default = resolve_output_path(

@@ -351,6 +351,12 @@ def build_parser():
     parser.add_argument("--policy", action="append", default=[])
     parser.add_argument("--policy-alias", help="Stable result ID for a single selected policy")
     parser.add_argument("--scenario", action="append", default=[])
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Run one exact manifest case; repeat for multiple cases",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; defaults to a timestamped directory for ablation runs")
     parser.add_argument("--resume", action="store_true")
@@ -392,6 +398,13 @@ def main(argv=None):
     cases = read_csv(args.cases)
     if args.scenario:
         cases = [case for case in cases if case["scenario_id"] in set(args.scenario)]
+    if args.case_id:
+        requested_case_ids = set(args.case_id)
+        available_case_ids = {case["case_id"] for case in cases}
+        unknown_case_ids = requested_case_ids - available_case_ids
+        if unknown_case_ids:
+            parser.error(f"unknown case id: {sorted(unknown_case_ids)[0]}")
+        cases = [case for case in cases if case["case_id"] in requested_case_ids]
     if args.limit is not None:
         cases = cases[:args.limit]
     if not cases:

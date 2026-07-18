@@ -256,6 +256,7 @@ ablation_flight_speed.png
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。
 - `--simulator-retries`：基础设施故障后的自动重试次数，默认为 `1`。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
+- `--case-id <id>`：可选，只运行manifest中的指定case；可重复传入，用于精确复测并替换异常结果。
 
 按 `Ctrl+C` 中断时，当前case不会写入结果；脚本会先清理其进程。之后使用原输出目录继续，例如：
 

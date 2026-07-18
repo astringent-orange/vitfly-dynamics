@@ -76,7 +76,7 @@ tar -xJf <path/to/flightrender.tar.xz> \
 tar -xJf <path/to/pretrained_models.tar.xz> -C models
 ```
 
-#### 3.4 训练数据集
+#### 3.4 训练数据集（非必要）
 
 下载 [`dataset.tar.xz`](https://pan.baidu.com/s/17TVpN4KkvG-Y7gJA54uheg?pwd=9527)（提取码：`9527`），从仓库根目录解压：
 
@@ -190,6 +190,8 @@ flight_speed_7
 7个条件 × 10张地图 × 2个phase seed = 140轮
 ```
 
+下面每条模型命令默认都会完成全部140轮。每个case都会启动全新的ROS/Flightmare仿真器，并在结束后确认相关进程和topic已经消失，再进入下一个case。仿真器启动、必需topic或结果文件发生基础设施故障时，程序默认完整清理并自动重试一次；第二次仍失败则保存诊断并停止整批，避免将环境故障计入模型性能。
+
 三个模型合计 **420轮**。汇总指标包括：
 
 - 成功率：到达终点且全程零碰撞的rollout比例。
@@ -252,9 +254,19 @@ ablation_flight_speed.png
 - `--policy`：本次运行的模型；消融实验只能指定一个。
 - `--output`：可选。消融实验默认使用 `results/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。
+- `--simulator-retries`：基础设施故障后的自动重试次数，默认为 `1`。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 
-汇总脚本不自动排序或选择模型。结合 `summary.csv`、`paired_model_differences.csv` 和三张图，人工决定用于主对比实验的模型。
+按 `Ctrl+C` 中断时，当前case不会写入结果；脚本会先清理其进程。之后使用原输出目录继续，例如：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --policy single \
+  --output results/ablation/single_YYYYMMDD_HHMMSS \
+  --resume
+```
+
+`--resume`也会自动重跑并替换已有的 `simulator_error`、`runner_timeout` 或 `missing_result` 行，不会产生重复case。汇总只接受每个模型完整覆盖manifest中140个唯一case、且不存在基础设施故障或未知退出码的结果；退出码为2的 `controller_error` 是模型失败，允许进入统计。汇总脚本不自动排序或选择模型，需结合 `summary.csv`、`paired_model_differences.csv` 和三张图人工决定用于主对比实验的模型。
 
 ### Comparison experiment
 
@@ -306,7 +318,7 @@ python3 envtest/benchmark/run_comparison.py \
 python3 envtest/benchmark/summarize_comparison.py
 ```
 
-汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases；发现中断或不配对的结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparison/table/`：
+主对比实验同样会为每个case完整重启仿真器、默认重试一次基础设施故障，并支持 `--simulator-retries`。汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases且没有基础设施错误；发现中断、不配对或环境故障结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparison/table/`：
 
 ```text
 summary.csv

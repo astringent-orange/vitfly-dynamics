@@ -14,6 +14,11 @@ state_human=0
 random_env=0
 fixed_env=0
 force_rviz=0
+benchmark_mode="${VITFLY_BENCHMARK_MODE:-0}"
+ROS_PID=""
+PY_PID=""
+COMP_PID=""
+cleanup_in_progress=0
 env_count="${VITFLY_ENV_COUNT:-101}"
 env_level="${VITFLY_ENV_LEVEL:-dynamic_astar_medium}"
 des_vel="${VITFLY_DES_VEL:-4.0}"
@@ -72,6 +77,7 @@ do
     result_path="${arg#result_path=}"
   elif [ "$arg" = "benchmark_mode" ]
   then
+    benchmark_mode=1
     export VITFLY_BENCHMARK_MODE=1
   elif [[ "$arg" == model_type=* || "$arg" == frame_offset=* ]]
   then
@@ -79,6 +85,16 @@ do
     exit 1
   fi
 done
+
+if [ "$benchmark_mode" = "1" ]
+then
+  export VITFLY_BENCHMARK_MODE=1
+  if [ "$N" != "1" ]
+  then
+    echo "[LAUNCH SCRIPT] benchmark_mode requires exactly one rollout per launch."
+    exit 3
+  fi
+fi
 
 if ! [[ "$offset" =~ ^[012]$ ]]
 then
@@ -210,6 +226,54 @@ wait_for_process_exit() {
   return 0
 }
 
+wait_for_pid_exit() {
+  process_pid="$1"
+  timeout_s="${2:-15}"
+  start_wait=$(date +%s)
+  while kill -0 "$process_pid" 2>/dev/null
+  do
+    if ((($(date +%s) - start_wait) >= timeout_s))
+    then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+simulator_stack_running() {
+  local process_name
+  for process_name in roslaunch visionsim_node flight_render dodgeros_pilot roscore rosmaster rosout gzserver gzclient
+  do
+    if pgrep -x "$process_name" >/dev/null
+    then
+      return 0
+    fi
+  done
+  return 1
+}
+
+wait_for_simulator_shutdown() {
+  timeout_s="${1:-15}"
+  start_wait=$(date +%s)
+  while simulator_stack_running || ros_master_ready
+  do
+    if ((($(date +%s) - start_wait) >= timeout_s))
+    then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+signal_simulator_stack() {
+  signal_name="$1"
+  killall "-$signal_name" roslaunch visionsim_node flight_render dodgeros_pilot \
+    roscore rosmaster rosout gzserver gzclient RPG_Flightmare. rviz 2>/dev/null
+  return 0
+}
+
 ensure_environment_exists() {
   environment_dir="$FLIGHTMARE_PATH/flightpy/configs/vision/$VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER"
   if [ ! -f "$environment_dir/static_obstacles.csv" ] || \
@@ -223,7 +287,7 @@ ensure_environment_exists() {
 }
 
 launch_simulator() {
-  if pgrep -x visionsim_node >/dev/null && ros_master_ready
+  if [ "$benchmark_mode" != "1" ] && pgrep -x visionsim_node >/dev/null && ros_master_ready
   then
     ROS_PID=""
     wait_for_sim_topics || return 1
@@ -252,26 +316,58 @@ launch_simulator() {
 }
 
 stop_simulator() {
-  if [ $ROS_PID ]
+  if [ -n "$ROS_PID" ] && kill -0 "$ROS_PID" 2>/dev/null
   then
     kill -SIGINT "$ROS_PID"
-    sleep 3
-    ROS_PID=""
+    if ! wait_for_pid_exit "$ROS_PID" 15
+    then
+      kill -SIGTERM "$ROS_PID" 2>/dev/null
+      if ! wait_for_pid_exit "$ROS_PID" 5
+      then
+        kill -SIGKILL "$ROS_PID" 2>/dev/null
+        wait_for_pid_exit "$ROS_PID" 5
+      fi
+    fi
   fi
+  ROS_PID=""
 }
 
 force_stop_simulator() {
   stop_simulator
-  killall -9 roslaunch visionsim_node flight_render dodgeros_pilot roscore rosmaster rosout gzserver gzclient RPG_Flightmare. rviz 2>/dev/null
-  wait_for_process_exit visionsim_node 10
-  sleep 10
+  if simulator_stack_running || ros_master_ready
+  then
+    echo "[LAUNCH SCRIPT] Cleaning residual simulator processes."
+    signal_simulator_stack INT
+    wait_for_simulator_shutdown 15
+  fi
+  if simulator_stack_running || ros_master_ready
+  then
+    signal_simulator_stack TERM
+    wait_for_simulator_shutdown 5
+  fi
+  if simulator_stack_running || ros_master_ready
+  then
+    signal_simulator_stack KILL
+    wait_for_simulator_shutdown 5
+  fi
+  if simulator_stack_running || ros_master_ready
+  then
+    echo "[LAUNCH SCRIPT] ERROR: Simulator processes did not shut down completely."
+    return 1
+  fi
+  return 0
 }
 
 prepare_pilot_for_rollout() {
   local attempt
-  for attempt in 1 2
+  local maximum_attempts=2
+  if [ "$benchmark_mode" = "1" ]
+  then
+    maximum_attempts=1
+  fi
+  for attempt in $(seq 1 "$maximum_attempts")
   do
-    echo "[LAUNCH SCRIPT] Preparing low-level pilot (attempt $attempt/2)"
+    echo "[LAUNCH SCRIPT] Preparing low-level pilot (attempt $attempt/$maximum_attempts)"
     rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
     sleep 1
     rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
@@ -286,9 +382,9 @@ prepare_pilot_for_rollout() {
     fi
 
     echo "[LAUNCH SCRIPT] Pilot did not reach hover on attempt $attempt."
-    if [ "$attempt" -eq 1 ]
+    if [ "$attempt" -lt "$maximum_attempts" ]
     then
-      force_stop_simulator
+      force_stop_simulator || return 1
       launch_simulator || return 1
     fi
   done
@@ -300,20 +396,98 @@ stop_controller() {
   then
     return
   fi
-  if ps -p "$COMP_PID" > /dev/null
+  if kill -0 "$COMP_PID" 2>/dev/null
   then
     rostopic pub /kingfisher/finish_navigation std_msgs/Empty "{}" --once >/dev/null 2>&1
-    for _ in $(seq 1 5)
-    do
-      if ! ps -p "$COMP_PID" > /dev/null
+    if ! wait_for_pid_exit "$COMP_PID" 5
+    then
+      kill -SIGINT "$COMP_PID" 2>/dev/null
+      if ! wait_for_pid_exit "$COMP_PID" 5
       then
-        return
+        kill -SIGTERM "$COMP_PID" 2>/dev/null
+        if ! wait_for_pid_exit "$COMP_PID" 3
+        then
+          kill -SIGKILL "$COMP_PID" 2>/dev/null
+          wait_for_pid_exit "$COMP_PID" 3
+        fi
       fi
-      sleep 1
-    done
-    kill -SIGINT "$COMP_PID"
+    fi
   fi
+  wait "$COMP_PID" 2>/dev/null
+  COMP_PID=""
 }
+
+stop_evaluator() {
+  if [ -z "$PY_PID" ]
+  then
+    return
+  fi
+  if kill -0 "$PY_PID" 2>/dev/null
+  then
+    kill -SIGINT "$PY_PID" 2>/dev/null
+    if ! wait_for_pid_exit "$PY_PID" 5
+    then
+      kill -SIGTERM "$PY_PID" 2>/dev/null
+      if ! wait_for_pid_exit "$PY_PID" 3
+      then
+        kill -SIGKILL "$PY_PID" 2>/dev/null
+        wait_for_pid_exit "$PY_PID" 3
+      fi
+    fi
+  fi
+  wait "$PY_PID" 2>/dev/null
+  PY_PID=""
+}
+
+write_rollout_failure_summary() {
+  failure_reason="$1"
+  cat > ./envtest/ros/summary.yaml <<EOF
+Success: false
+goal_reached: false
+collision: false
+collision_count: 0
+termination_reason: $failure_reason
+EOF
+}
+
+simulator_error_exit() {
+  if [ "$benchmark_mode" = "1" ]
+  then
+    exit 3
+  fi
+  exit 1
+}
+
+cleanup_on_exit() {
+  original_status="$1"
+  if ((cleanup_in_progress))
+  then
+    return
+  fi
+  cleanup_in_progress=1
+  trap - EXIT INT TERM
+
+  stop_evaluator
+  stop_controller
+  if [ "$benchmark_mode" = "1" ]
+  then
+    if ! force_stop_simulator && [ "$original_status" -eq 0 ]
+    then
+      original_status=3
+    fi
+  else
+    stop_simulator
+  fi
+  exit "$original_status"
+}
+
+handle_signal() {
+  echo "[LAUNCH SCRIPT] Interrupted; cleaning current rollout."
+  exit 130
+}
+
+trap handle_signal INT TERM
+trap 'cleanup_on_exit $?' EXIT
 
 if ((random_env))
 then
@@ -323,8 +497,12 @@ else
   export VITFLY_ENV_FOLDER="${VITFLY_ENV_FOLDER:-environment_0}"
   export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
   export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$VITFLY_ENV_SEED}"
-  ensure_environment_exists || exit 1
-  launch_simulator || exit 1
+  ensure_environment_exists || simulator_error_exit
+  if [ "$benchmark_mode" = "1" ]
+  then
+    force_stop_simulator || simulator_error_exit
+  fi
+  launch_simulator || simulator_error_exit
 fi
 
 SUMMARY_FILE="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
@@ -336,6 +514,7 @@ datetime=$(date '+d%m_%d_t%H_%M')
 
 relaunch_sim=0
 batch_failed=0
+batch_infrastructure_failed=0
 
 for i in $(eval echo {1..$N})
 do
@@ -347,9 +526,9 @@ do
     export VITFLY_ENV_SEED="$((10 + env_id))"
     export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((phase_seed_base + i - 1))}"
     echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED phase_seed=$VITFLY_DYNAMIC_PHASE_SEED"
-    ensure_environment_exists || exit 1
-    force_stop_simulator
-    launch_simulator || exit 1
+    ensure_environment_exists || simulator_error_exit
+    force_stop_simulator || simulator_error_exit
+    launch_simulator || simulator_error_exit
   fi
 
   # Reset the simulator if needed
@@ -367,17 +546,17 @@ do
 
     # reset flag and kill everything to restart
     relaunch_sim=0
-    force_stop_simulator
+    force_stop_simulator || simulator_error_exit
 
     # Launch the simulator, unless it is already running
-    launch_simulator || exit 1
+    launch_simulator || simulator_error_exit
 
   fi
 
   if ! prepare_pilot_for_rollout
   then
     echo "[LAUNCH SCRIPT] ERROR: Pilot never reached hover for rollout $i; no trajectory was created."
-    exit 1
+    simulator_error_exit
   fi
 
   export ROLLOUT_NAME="rollout_""$i"
@@ -392,24 +571,28 @@ do
   COMP_PID="$!"
   cd -
 
-  wait_for_topic /kingfisher/start_navigation 30 || exit 1
+  wait_for_topic /kingfisher/start_navigation 30 || simulator_error_exit
 
   start_time=$(date +%s)
   # Wait until the evaluation script has finished
   while ps -p $PY_PID > /dev/null
   do
+    if ! ros_master_ready || \
+       ! topic_ready /kingfisher/dodgeros_pilot/state || \
+       ! topic_ready /kingfisher/dodgeros_pilot/unity/depth
+    then
+      echo "[LAUNCH_EVALUATION] Simulator topics disappeared during rollout."
+      batch_infrastructure_failed=1
+      stop_evaluator
+      write_rollout_failure_summary simulator_error
+      break
+    fi
     if ! ps -p $COMP_PID > /dev/null
     then
       echo "[LAUNCH_EVALUATION] Controller exited before evaluator completed."
       batch_failed=1
-      kill -SIGINT $PY_PID 2>/dev/null
-      cat > ./envtest/ros/summary.yaml <<'EOF'
-Success: false
-goal_reached: false
-collision: false
-collision_count: 0
-termination_reason: controller_error
-EOF
+      stop_evaluator
+      write_rollout_failure_summary controller_error
       break
     fi
     echo
@@ -430,27 +613,37 @@ EOF
       echo
       echo
       echo
-      kill -SIGINT $PY_PID
-      relaunch_sim=1
+      stop_evaluator
+      batch_infrastructure_failed=1
+      write_rollout_failure_summary simulator_error
       break
     fi
 
   done
 
+  if [ -n "$PY_PID" ]
+  then
+    wait "$PY_PID" 2>/dev/null
+    PY_PID=""
+  fi
+
   cat "$SUMMARY_FILE" "./envtest/ros/summary.yaml" > "tmp.yaml"
   mv "tmp.yaml" "$SUMMARY_FILE"
 
   stop_controller
-  if ((random_env))
+  if [ "$benchmark_mode" = "1" ]
+  then
+    force_stop_simulator || batch_infrastructure_failed=1
+  elif ((random_env))
   then
     stop_simulator
   fi
-done
 
-if [ $ROS_PID ]
-then
-  kill -SIGINT "$ROS_PID"
-fi
+  if ((batch_infrastructure_failed))
+  then
+    exit 3
+  fi
+done
 
 if ((batch_failed))
 then

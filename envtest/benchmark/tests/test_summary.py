@@ -15,6 +15,7 @@ from envtest.benchmark.summarize_results import (
     plot_factor_sweeps,
     read_result_files,
     summarize,
+    validate_result_integrity,
 )
 
 
@@ -145,6 +146,48 @@ class SummaryTest(unittest.TestCase):
         figure, axes = build_factor_figure(summaries, FACTOR_SPECS[0])
         self.assertTrue(math.isnan(axes[2].lines[0].get_ydata()[0]))
         plt.close(figure)
+
+    def complete_integrity_rows(self):
+        expected = {f"c{index}" for index in range(140)}
+        rows = [
+            {
+                "policy_id": policy,
+                "case_id": case_id,
+                "termination_reason": "goal_reached",
+                "runner_returncode": "0",
+            }
+            for policy in ("single", "adjacent", "skip_one")
+            for case_id in expected
+        ]
+        return expected, rows
+
+    def test_integrity_accepts_complete_results_and_controller_failures(self):
+        expected, rows = self.complete_integrity_rows()
+        rows[0]["termination_reason"] = "controller_error"
+        rows[0]["runner_returncode"] = "2"
+        validate_result_integrity(rows, expected, ("single", "adjacent", "skip_one"))
+
+    def test_integrity_rejects_21_of_140_and_duplicate_cases(self):
+        expected, rows = self.complete_integrity_rows()
+        incomplete = [
+            row for row in rows
+            if row["policy_id"] != "single" or int(row["case_id"][1:]) < 21
+        ]
+        with self.assertRaisesRegex(ValueError, "21/140"):
+            validate_result_integrity(incomplete, expected, ("single", "adjacent", "skip_one"))
+        with self.assertRaisesRegex(ValueError, "duplicate result"):
+            validate_result_integrity(rows + [dict(rows[0])], expected, ("single", "adjacent", "skip_one"))
+
+    def test_integrity_rejects_infrastructure_and_unknown_exit_code(self):
+        expected, rows = self.complete_integrity_rows()
+        rows[0]["termination_reason"] = "runner_timeout"
+        rows[0]["runner_returncode"] = "124"
+        with self.assertRaisesRegex(ValueError, "infrastructure failure"):
+            validate_result_integrity(rows, expected, ("single", "adjacent", "skip_one"))
+        rows[0]["termination_reason"] = "controller_error"
+        rows[0]["runner_returncode"] = "9"
+        with self.assertRaisesRegex(ValueError, "unknown runner return code"):
+            validate_result_integrity(rows, expected, ("single", "adjacent", "skip_one"))
 
 
 if __name__ == "__main__":

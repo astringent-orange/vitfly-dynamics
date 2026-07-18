@@ -26,6 +26,8 @@ class ComparisonRunnerTest(unittest.TestCase):
         self.assertIn("source_policy_id", RESULT_FIELDS)
         self.assertIn("adapter", RESULT_FIELDS)
         self.assertIn("frame_offset", RESULT_FIELDS)
+        self.assertIn("attempt_count", RESULT_FIELDS)
+        self.assertEqual(args.simulator_retries, 1)
 
     def test_best_model_uses_one_manual_policy_parameter(self):
         for policy in ("single", "adjacent", "skip_one"):

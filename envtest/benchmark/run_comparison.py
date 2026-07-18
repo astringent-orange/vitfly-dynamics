@@ -62,6 +62,7 @@ def build_parser():
     parser.add_argument("--output", help="Result directory; timestamped under results/comparison by default")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
+    parser.add_argument("--simulator-retries", type=int, default=1)
     return parser
 
 
@@ -84,6 +85,7 @@ def main(argv=None):
         "--policy-alias", result_id,
         "--output", str(output),
         "--runner-timeout", str(args.runner_timeout),
+        "--simulator-retries", str(args.simulator_retries),
     ]
     for scenario in args.scenario:
         benchmark_args.extend(("--scenario", scenario))

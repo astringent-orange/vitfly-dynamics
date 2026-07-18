@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ABLATION_RESULTS_ROOT = ROOT / "results" / "ablation"
 DEFAULT_TABLE_OUTPUT = ABLATION_RESULTS_ROOT / "table"
+DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "ablation_validation_cases.csv"
+INFRASTRUCTURE_REASONS = {"simulator_error", "runner_timeout", "missing_result"}
 SUMMARY_FIELDS = [
     "policy_id", "scenario_id", "total", "success_count", "success_rate",
     "collision_count", "collision_rate", "successful_time_mean",
@@ -72,6 +74,54 @@ def read_result_files(paths):
             seen.add(key)
             rows.append(row)
     return rows
+
+
+def validate_result_integrity(rows, expected_case_ids, policy_order):
+    """Reject incomplete, duplicate, or infrastructure-contaminated results."""
+    expected = set(expected_case_ids)
+    expected_policies = set(policy_order)
+    by_policy = {policy: set() for policy in policy_order}
+    seen = set()
+    for row in rows:
+        policy = row.get("policy_id", "")
+        case_id = row.get("case_id", "")
+        if policy not in expected_policies:
+            raise ValueError(f"unexpected policy in results: {policy}")
+        key = (policy, case_id)
+        if key in seen:
+            raise ValueError(f"duplicate result for policy/case: {policy} / {case_id}")
+        seen.add(key)
+        by_policy[policy].add(case_id)
+
+        reason = row.get("termination_reason", "")
+        if reason in INFRASTRUCTURE_REASONS:
+            raise ValueError(
+                f"infrastructure failure in results: {policy} / {case_id} / {reason}"
+            )
+        raw_returncode = row.get("runner_returncode", "0")
+        try:
+            returncode = int(raw_returncode or 0)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"invalid runner return code for {policy} / {case_id}: {raw_returncode}"
+            ) from error
+        if returncode not in {0, 2}:
+            raise ValueError(
+                f"unknown runner return code for {policy} / {case_id}: {returncode}"
+            )
+        if returncode == 2 and reason != "controller_error":
+            raise ValueError(
+                f"runner return code 2 must be controller_error: {policy} / {case_id}"
+            )
+
+    for policy, actual in by_policy.items():
+        if actual != expected:
+            missing = len(expected - actual)
+            extra = len(actual - expected)
+            raise ValueError(
+                f"incomplete results for {policy}: {len(actual)}/{len(expected)} cases, "
+                f"missing={missing}, extra={extra}"
+            )
 
 
 def latest_named_result_paths(root, policy_order):
@@ -309,18 +359,26 @@ def build_parser():
     return parser
 
 
-def main():
+def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args()
-    result_paths = (
-        [Path(path) for path in args.results]
-        if args.results
-        else latest_policy_result_paths()
-    )
+    args = parser.parse_args(argv)
+    try:
+        result_paths = (
+            [Path(path) for path in args.results]
+            if args.results
+            else latest_policy_result_paths()
+        )
+    except FileNotFoundError as error:
+        parser.error(str(error))
     output = Path(args.output)
     for path in result_paths:
         print(f"[SUMMARY] source: {path}")
     rows = read_result_files(result_paths)
+    expected_case_ids = [row["case_id"] for row in read_csv(DEFAULT_CASES)]
+    try:
+        validate_result_integrity(rows, expected_case_ids, POLICY_ORDER)
+    except ValueError as error:
+        parser.error(str(error))
     summaries, _paired = write_summary_outputs(rows, result_paths, output)
     print(f"[SUMMARY] wrote {output / 'summary.csv'} groups={len(summaries)}")
 

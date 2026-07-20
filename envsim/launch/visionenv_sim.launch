@@ -11,6 +11,8 @@
     <arg name="real_time_factor" default="1.0"/>
     <arg name="gui" default="True"/>
     <arg name="rviz" default="True"/>
+    <arg name="publish_rgb" default="True"/>
+    <arg name="publish_optical_flow" default="True"/>
 
     <!-- quadrotor simulation -->
     <group ns="$(arg quad_name)">
@@ -23,6 +25,8 @@
             <param name="low_level_controller" value="$(arg low_level_controller)"/>
             <param name="camera_config" value="$(find envsim)/parameters/camera_config.yaml"/>
             <param name="render" value="$(arg render)"/>
+            <param name="publish_rgb" value="$(arg publish_rgb)"/>
+            <param name="publish_optical_flow" value="$(arg publish_optical_flow)"/>
         </node>
     </group>
 

@@ -15,6 +15,8 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
   : nh_(nh), pnh_(pnh), frame_id_(0) {
   // Logic subscribers
   reset_sub_ = pnh_.subscribe("reset_sim", 1, &VisionSim::resetCallback, this);
+  reset_benchmark_service_ = pnh_.advertiseService(
+    "reset_benchmark", &VisionSim::resetBenchmarkCallback, this);
 
   // Publishers
   clock_pub_ = nh_.advertise<rosgraph_msgs::Clock>("/clock", 1);
@@ -23,14 +25,22 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
 
   image_transport::ImageTransport it(pnh_);
 
+  pnh_.param("publish_rgb", publish_rgb_, true);
+  pnh_.param("publish_optical_flow", publish_optical_flow_, true);
+
   obstacle_pub_ =
     pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/obstacles", 1);
   dynamic_obstacle_pub_ =
     pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/dynamic_obstacles", 1);
 
-  image_pub_ = it.advertise("unity/image", 1);
+  if (publish_rgb_) image_pub_ = it.advertise("unity/image", 1);
   depth_pub_ = it.advertise("unity/depth", 1);
-  opticalflow_pub_ = it.advertise("unity/opticalflow", 1);
+  if (publish_optical_flow_)
+    opticalflow_pub_ = it.advertise("unity/opticalflow", 1);
+
+  ROS_INFO("Vision image outputs: depth=on rgb=%s optical_flow=%s",
+           publish_rgb_ ? "on" : "off",
+           publish_optical_flow_ ? "on" : "off");
 
   ros_pilot_.getQuadrotor(&quad_);
   simulator_.updateQuad(quad_);
@@ -42,6 +52,11 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
   pnh_.getParam("agi_param_dir", agi_param_directory_);
   pnh_.getParam("ros_param_dir", ros_param_directory_);
   pnh_.getParam("real_time_factor", real_time_factor_);
+  const char* env_level = std::getenv("VITFLY_ENV_LEVEL");
+  const char* env_folder = std::getenv("VITFLY_ENV_FOLDER");
+  pnh_.setParam("active_env_level", env_level ? std::string(env_level) : "");
+  pnh_.setParam("active_env_folder", env_folder ? std::string(env_folder) : "");
+  pnh_.setParam("real_time_factor", real_time_factor_);
   const bool got_directory =
     pnh_.getParam("agi_param_dir", agi_param_directory_);
 
@@ -76,51 +91,75 @@ VisionSim::~VisionSim() {
   if (render_thread_.joinable()) render_thread_.join();
 }
 
-void VisionSim::resetCallback(const std_msgs::EmptyConstPtr &msg) {
+bool VisionSim::resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases) {
   ROS_INFO("Resetting simulator!");
   QuadState reset_state;
   {
     const std::lock_guard<std::mutex> lock(sim_mutex_);
+    // Keep the externally visible simulated clock monotonic when a reused
+    // session resets its local simulator time to zero.
+    sim_time_offset_ = std::max(
+      sim_time_offset_, last_published_time_ - t_start_.toSec() + sim_dt_);
     simulator_.reset(false);
     simulator_.setCommand(Command(0.0, 0.0, Vector<3>::Zero()));
     simulator_.getState(&reset_state);
   }
+  {
+    const std::lock_guard<std::mutex> lock(dynamic_objects_mutex_);
+    *phases = vision_env_ptr_->resetDynamicObstaclePhases(phase_seed);
+    // Change the position of dynamic obstacles if the trigger is set while
+    // holding the same lock used by the simulation loop.
+    if (vision_env_ptr_->_move_obst_trigger) vision_env_ptr_->move();
+  }
+  std::ostringstream phase_log;
+  phase_log << "Reset dynamic obstacle phases with seed=" << phase_seed << ":";
+  for (const Scalar phase : *phases) phase_log << " " << phase;
+  ROS_INFO_STREAM(phase_log.str());
+  reset_state.t += t_start_.toSec() + sim_time_offset_;
+  ROS_INFO_STREAM("Simulator reset complete at external time " << reset_state.t);
+  return true;
+}
+
+void VisionSim::resetCallback(const std_msgs::EmptyConstPtr &msg) {
   const char* phase_seed_env = std::getenv("VITFLY_DYNAMIC_PHASE_SEED");
   if (phase_seed_env == nullptr || std::string(phase_seed_env).empty()) {
     phase_seed_env = std::getenv("VITFLY_ENV_SEED");
   }
   const uint32_t phase_seed = phase_seed_env == nullptr
-    ? 0u
-    : static_cast<uint32_t>(std::strtoul(phase_seed_env, nullptr, 10));
+    ? 0u : static_cast<uint32_t>(std::strtoul(phase_seed_env, nullptr, 10));
   std::vector<Scalar> phases;
-  {
-    const std::lock_guard<std::mutex> lock(dynamic_objects_mutex_);
-    phases = vision_env_ptr_->resetDynamicObstaclePhases(phase_seed);
-  }
-  std::ostringstream phase_log;
-  phase_log << "Reset dynamic obstacle phases with seed=" << phase_seed << ":";
-  for (const Scalar phase : phases) phase_log << " " << phase;
-  ROS_INFO_STREAM(phase_log.str());
-  // [KR_AGILE] Modified
-  //Change the position of dynamic obstacles if the trigger is set
-  if (vision_env_ptr_->_move_obst_trigger) vision_env_ptr_->move();
+  resetSimulation(phase_seed, &phases);
+}
 
-  reset_state.t += t_start_.toSec();
+bool VisionSim::resetBenchmarkCallback(std_srvs::Trigger::Request& request,
+                                        std_srvs::Trigger::Response& response) {
+  (void)request;
+  int seed = 0;
+  pnh_.param("dynamic_phase_seed", seed, 0);
+  std::vector<Scalar> phases;
+  response.success = resetSimulation(static_cast<uint32_t>(std::max(seed, 0)), &phases);
+  std::ostringstream message;
+  message << "phase_seed=" << std::max(seed, 0) << " phases=" << phases.size();
+  response.message = message.str();
+  return true;
 }
 
 void VisionSim::simLoop() {
   while (ros::ok()) {
     ros::WallTime t_start_sim = ros::WallTime::now();
     QuadState quad_state;
+    Scalar sim_time = 0.0;
+    Scalar external_time = 0.0;
     {
       const std::lock_guard<std::mutex> lock(sim_mutex_);
       simulator_.getState(&quad_state);
+      sim_time = quad_state.t;
+      external_time = quad_state.t + t_start_.toSec() + sim_time_offset_;
+      quad_state.t = external_time;
+      last_published_time_ = external_time;
     }
 
     // we add an offset to have realistic timestamps
-    Scalar sim_time = quad_state.t;
-    quad_state.t += t_start_.toSec();
-
     rosgraph_msgs::Clock curr_time;
     curr_time.clock.fromSec(quad_state.t);
     clock_pub_.publish(curr_time);
@@ -133,7 +172,12 @@ void VisionSim::simLoop() {
     ros_pilot_.getPilot().odometryCallback(quad_state);
 
     Command cmd = ros_pilot_.getCommand();
-    cmd.t -= t_start_.toSec();
+    Scalar command_time_origin = 0.0;
+    {
+      const std::lock_guard<std::mutex> lock(sim_mutex_);
+      command_time_origin = t_start_.toSec() + sim_time_offset_;
+    }
+    cmd.t -= command_time_origin;
     if (cmd.valid()) {
       {
         const std::lock_guard<std::mutex> lock(sim_mutex_);
@@ -263,7 +307,6 @@ void VisionSim::publishDynamicObstacles(const QuadState &state) {
 
 
 void VisionSim::publishImages(const QuadState &state) {
-  sensor_msgs::ImagePtr rgb_msg;
   frame_id_ += 1;
   // render the frame
   flightlib::QuadState unity_quad_state;
@@ -278,29 +321,38 @@ void VisionSim::publishImages(const QuadState &state) {
 
   vision_env_ptr_->updateUnity(frame_id_);
 
-  // Warning, delay
-  cv::Mat img, depth, of;
+  // Unity always returns a base RGB layer, but benchmark mode avoids copying,
+  // converting and publishing layers that the controller does not consume.
+  std::shared_ptr<flightlib::RGBCamera> camera = unity_quad->getCameras()[0];
+  if (publish_rgb_) {
+    cv::Mat rgb;
+    if (camera->getRGBImage(rgb)) {
+      sensor_msgs::ImagePtr rgb_msg =
+        cv_bridge::CvImage(std_msgs::Header(), "bgr8", rgb).toImageMsg();
+      rgb_msg->header.stamp = ros::Time(state.t);
+      image_pub_.publish(rgb_msg);
+    }
+  }
 
-  // RGB Image
-  unity_quad->getCameras()[0]->getRGBImage(img);
-  rgb_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", img).toImageMsg();
-  rgb_msg->header.stamp = ros::Time(state.t);
-  image_pub_.publish(rgb_msg);
-
-
-  // // Depth Image
-  unity_quad->getCameras()[0]->getDepthMap(depth);
+  cv::Mat depth;
+  if (!camera->getDepthMap(depth)) {
+    ROS_WARN_THROTTLE(1.0, "Unity did not return a depth image for this frame");
+    return;
+  }
   sensor_msgs::ImagePtr depth_msg =
     cv_bridge::CvImage(std_msgs::Header(), "32FC1", depth).toImageMsg();
   depth_msg->header.stamp = ros::Time(state.t);
   depth_pub_.publish(depth_msg);
 
-  // Optical Flow
-  unity_quad->getCameras()[0]->getOpticalFlow(of);
-  sensor_msgs::ImagePtr of_msg =
-    cv_bridge::CvImage(std_msgs::Header(), "bgr8", of).toImageMsg();
-  of_msg->header.stamp = ros::Time(state.t);
-  opticalflow_pub_.publish(of_msg);
+  if (publish_optical_flow_) {
+    cv::Mat optical_flow;
+    if (camera->getOpticalFlow(optical_flow)) {
+      sensor_msgs::ImagePtr optical_flow_msg =
+        cv_bridge::CvImage(std_msgs::Header(), "bgr8", optical_flow).toImageMsg();
+      optical_flow_msg->header.stamp = ros::Time(state.t);
+      opticalflow_pub_.publish(optical_flow_msg);
+    }
+  }
 }
 
 

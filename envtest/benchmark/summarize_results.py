@@ -4,6 +4,7 @@
 import argparse
 import csv
 import json
+import math
 import random
 import statistics
 from pathlib import Path
@@ -17,6 +18,8 @@ SUMMARY_FIELDS = [
     "policy_id", "scenario_id", "total", "success_count", "success_rate",
     "collision_count", "collision_rate", "successful_time_mean",
     "successful_time_median", "success_ci_low", "success_ci_high",
+    "dynamic_encounter_rate", "dynamic_collision_count",
+    "min_dynamic_clearance_mean", "altitude_min_mean", "altitude_max_mean",
 ]
 PAIRED_FIELDS = [
     "scenario_id", "policy_a", "policy_b", "paired_total",
@@ -27,33 +30,44 @@ POLICY_ORDER = ("single", "adjacent", "skip_one")
 FACTOR_SPECS = (
     {
         "filename": "ablation_dynamic_speed.png",
-        "title": "Dynamic obstacle speed sweep",
         "xlabel": "Dynamic obstacle speed (m/s)",
-        "x_values": (1.0, 2.0, 3.0),
-        "tick_labels": ("1", "2", "3"),
-        "scenarios": ("dynamic_speed_1mps", "baseline", "dynamic_speed_3mps"),
-    },
-    {
-        "filename": "ablation_forest_density.png",
-        "title": "Forest density sweep",
-        "xlabel": "Number of trees",
-        "x_values": (50.0, 100.0, 150.0),
-        "tick_labels": ("50", "100", "150"),
-        "scenarios": ("forest_density_low", "baseline", "forest_density_high"),
+        "xlabel_zh": "动态障碍物速度（米/秒）",
+        "short_label_zh": "动态",
+        "tick_labels_zh": ("1", "2", "3", "4"),
+        "x_values": (1.0, 2.0, 3.0, 4.0),
+        "tick_labels": ("1", "2", "3", "4"),
+        "scenarios": ("dynamic_speed_1mps", "dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps"),
     },
     {
         "filename": "ablation_flight_speed.png",
-        "title": "Flight speed sweep",
         "xlabel": "Desired flight speed (m/s)",
-        "x_values": (3.0, 5.0, 7.0),
-        "tick_labels": ("3", "5", "7"),
-        "scenarios": ("flight_speed_3", "baseline", "flight_speed_7"),
+        "xlabel_zh": "设定飞行速度（米/秒）",
+        "short_label_zh": "飞行",
+        "tick_labels_zh": ("2", "4", "6", "8"),
+        "x_values": (2.0, 4.0, 6.0, 8.0),
+        "tick_labels": ("2", "4", "6", "8"),
+        "scenarios": ("flight_speed_2", "flight_speed_4", "flight_speed_6", "flight_speed_8"),
     },
 )
 LEGACY_PLOT_FILENAMES = (
     "success_rate_by_scenario.png",
     "collision_rate_by_scenario.png",
     "flight_time_by_scenario.png",
+    "ablation_forest_density.png",
+    "comparison_forest_density.png",
+)
+POLICY_DISPLAY_NAMES_ZH = {
+    "single": "单帧",
+    "adjacent": "相邻双帧",
+    "skip_one": "隔帧双帧",
+    "best_ours": "本文模型",
+    "vitfly": "原版模型",
+    "fastplanner": "快速规划器",
+    "egoplanner": "局部规划器",
+}
+CHINESE_FONT_PATHS = (
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
 )
 
 
@@ -80,6 +94,15 @@ def validate_result_integrity(rows, expected_case_ids, policy_order):
     """Reject incomplete, duplicate, or infrastructure-contaminated results."""
     expected = set(expected_case_ids)
     expected_policies = set(policy_order)
+    factors = {
+        float(row["real_time_factor"])
+        for row in rows
+        if row.get("real_time_factor") not in (None, "")
+    }
+    if len(factors) > 1:
+        raise ValueError(
+            f"mixed real_time_factor values in one summary: {sorted(factors)}"
+        )
     by_policy = {policy: set() for policy in policy_order}
     seen = set()
     for row in rows:
@@ -177,6 +200,34 @@ def summarize(rows):
         successes = [as_int(row.get("success", 0)) for row in group]
         collisions = [as_int(row.get("collision", 0)) for row in group]
         times = [float(row["flight_time"]) for row in group if row.get("success") == "1" and row.get("flight_time") not in ("", None)]
+        diagnostic_rows = [
+            row for row in group
+            if row.get("dynamic_encounter_count") not in ("", None)
+        ]
+        encounter_rate = (
+            sum(float(row["dynamic_encounter_count"]) > 0 for row in diagnostic_rows)
+            / len(diagnostic_rows)
+            if diagnostic_rows else ""
+        )
+        dynamic_collision_count = (
+            sum(as_int(row.get("dynamic_collision", 0)) for row in diagnostic_rows)
+            if diagnostic_rows else ""
+        )
+        clearances = [
+            float(row["min_dynamic_clearance"])
+            for row in diagnostic_rows
+            if row.get("min_dynamic_clearance") not in ("", None)
+        ]
+        altitude_mins = [
+            float(row["altitude_min"])
+            for row in diagnostic_rows
+            if row.get("altitude_min") not in ("", None)
+        ]
+        altitude_maxs = [
+            float(row["altitude_max"])
+            for row in diagnostic_rows
+            if row.get("altitude_max") not in ("", None)
+        ]
         ci_low, ci_high = bootstrap(successes)
         summaries.append({
             "policy_id": policy,
@@ -190,6 +241,17 @@ def summarize(rows):
             "successful_time_median": statistics.median(times) if times else "",
             "success_ci_low": ci_low,
             "success_ci_high": ci_high,
+            "dynamic_encounter_rate": encounter_rate,
+            "dynamic_collision_count": dynamic_collision_count,
+            "min_dynamic_clearance_mean": (
+                sum(clearances) / len(clearances) if clearances else ""
+            ),
+            "altitude_min_mean": (
+                sum(altitude_mins) / len(altitude_mins) if altitude_mins else ""
+            ),
+            "altitude_max_mean": (
+                sum(altitude_maxs) / len(altitude_maxs) if altitude_maxs else ""
+            ),
         })
     return summaries
 
@@ -233,62 +295,135 @@ def ordered_policies(summaries, policy_order=POLICY_ORDER):
     return [policy for policy in policy_order if policy in present]
 
 
-def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
-    """Build one three-panel single-factor figure from summary rows."""
-    import matplotlib.pyplot as plt
+def chinese_font_properties():
+    """Load a Chinese-capable font without relying on Matplotlib's font cache."""
+    from matplotlib.font_manager import FontProperties
 
+    font_path = next((path for path in CHINESE_FONT_PATHS if path.exists()), None)
+    return FontProperties(fname=str(font_path)) if font_path else FontProperties()
+
+
+def apply_font_properties(text_items, font_properties):
+    """Apply a font file while preserving each text object's existing style."""
+    for text_item in text_items:
+        font_size = text_item.get_fontsize()
+        font_weight = text_item.get_fontweight()
+        font_style = text_item.get_fontstyle()
+        text_item.set_fontproperties(font_properties)
+        text_item.set_fontsize(font_size)
+        text_item.set_fontweight(font_weight)
+        text_item.set_fontstyle(font_style)
+
+
+def compact_proportion_limits(values, include_zero=False, tick_step=0.04):
+    """Return compact, rounded limits for proportion-valued plot data."""
+    finite = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite:
+        return 0.0, 1.0
+    padding = tick_step / 2.0
+    lower = 0.0 if include_zero else max(
+        0.0,
+        math.floor((min(finite) - padding) / tick_step) * tick_step,
+    )
+    upper = min(
+        1.0,
+        math.ceil((max(finite) + padding) / tick_step) * tick_step,
+    )
+    if upper <= lower:
+        upper = min(1.0, lower + tick_step)
+        lower = max(0.0, upper - tick_step)
+    return lower, upper
+
+
+def factor_policy_series(summaries, spec, policy_order=POLICY_ORDER):
+    """Return aligned metric series for every policy in a factor sweep."""
     lookup = {(row["policy_id"], row["scenario_id"]): row for row in summaries}
-    policies = ordered_policies(summaries, policy_order)
-    x_values = list(spec["x_values"])
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
-
-    for policy in policies:
+    series = []
+    for policy in ordered_policies(summaries, policy_order):
         success_rates = []
-        ci_lower = []
-        ci_upper = []
         collision_rates = []
         flight_times = []
         for scenario_id in spec["scenarios"]:
             row = lookup.get((policy, scenario_id))
             if row is None:
                 success_rates.append(float("nan"))
-                ci_lower.append(0.0)
-                ci_upper.append(0.0)
                 collision_rates.append(float("nan"))
                 flight_times.append(float("nan"))
                 continue
-            success = float(row["success_rate"])
-            success_rates.append(success)
-            ci_lower.append(success - float(row["success_ci_low"]))
-            ci_upper.append(float(row["success_ci_high"]) - success)
+            success_rates.append(float(row["success_rate"]))
             collision_rates.append(float(row["collision_rate"]))
             median_time = row.get("successful_time_median")
-            flight_times.append(float(median_time) if median_time not in ("", None) else float("nan"))
+            flight_times.append(
+                float(median_time) if median_time not in ("", None) else float("nan")
+            )
+        series.append((policy, success_rates, collision_rates, flight_times))
+    return series
 
-        axes[0].errorbar(
-            x_values,
-            success_rates,
-            yerr=[ci_lower, ci_upper],
-            marker="o",
-            capsize=3,
-            label=policy,
-        )
-        axes[1].plot(x_values, collision_rates, marker="o", label=policy)
-        axes[2].plot(x_values, flight_times, marker="o", label=policy)
 
-    axes[0].set_ylabel("Success rate")
-    axes[0].set_ylim(-0.05, 1.05)
-    axes[0].legend()
-    axes[1].set_ylabel("Collision rate")
-    axes[1].set_ylim(-0.05, 1.05)
-    axes[2].set_ylabel("Median successful\nflight time (s)")
-    axes[2].set_xlabel(spec["xlabel"])
-    axes[2].set_xticks(x_values)
-    axes[2].set_xticklabels(spec["tick_labels"])
-    for axis in axes:
+def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
+    """Build one three-panel single-factor figure from summary rows."""
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator, MultipleLocator
+
+    x_values = list(spec["x_values"])
+    chinese_font = chinese_font_properties()
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), sharex=True)
+    success_axis_values = []
+    collision_axis_values = []
+
+    for policy, success_rates, collision_rates, flight_times in factor_policy_series(
+        summaries, spec, policy_order
+    ):
+        success_axis_values.extend(success_rates)
+        collision_axis_values.extend(collision_rates)
+        display_name = POLICY_DISPLAY_NAMES_ZH.get(policy, policy)
+        axes[0].plot(x_values, success_rates, marker="o", label=display_name)
+        axes[1].plot(x_values, collision_rates, marker="o", label=display_name)
+        axes[2].plot(x_values, flight_times, marker="o", label=display_name)
+
+    axes[0].set_ylim(*compact_proportion_limits(success_axis_values))
+    axes[0].yaxis.set_major_locator(MultipleLocator(0.04))
+    axes[1].set_ylim(*compact_proportion_limits(collision_axis_values, include_zero=True))
+    axes[1].yaxis.set_major_locator(MultipleLocator(0.04))
+    axes[2].yaxis.set_major_locator(MaxNLocator(nbins=5))
+    panel_labels = (
+        "成功率",
+        "碰撞率",
+        "成功飞行时间中位数（秒）",
+    )
+    for axis, panel_label in zip(axes, panel_labels):
+        axis.set_xticks(x_values)
+        axis.set_xticklabels(spec["tick_labels"])
         axis.grid(True, alpha=0.3)
-    fig.suptitle(spec["title"])
-    fig.tight_layout()
+        axis.text(
+            0.5,
+            -0.19,
+            panel_label,
+            ha="center",
+            va="top",
+            fontweight="semibold",
+            transform=axis.transAxes,
+        )
+    fig.suptitle(spec["xlabel_zh"], y=0.98)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=len(labels),
+        bbox_to_anchor=(0.5, 0.015),
+        fontsize=12,
+        markerscale=1.25,
+        handlelength=2.3,
+    )
+    apply_font_properties([
+        fig._suptitle,
+        *[text for axis in axes for text in axis.texts],
+        *[text for axis in axes for text in axis.get_xticklabels()],
+        *[text for axis in axes for text in axis.get_yticklabels()],
+        *fig.legends[0].get_texts(),
+    ], chinese_font)
+    fig.tight_layout(rect=(0.0, 0.12, 1.0, 0.93))
     return fig, axes
 
 

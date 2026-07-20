@@ -162,6 +162,10 @@ class AgilePilotNode:
         # never pollute the expert ``train_set``. State collection keeps the
         # historical behavior when this flag is absent.
         self.benchmark_mode = os.environ.get("VITFLY_BENCHMARK_MODE", "0") == "1"
+        timing_default = "false" if self.benchmark_mode else "true"
+        self.inference_timing_logs = os.environ.get(
+            "VITFLY_INFERENCE_TIMING_LOGS", timing_default
+        ).strip().lower() in ("1", "true", "yes", "on")
 
         # Create a trajectory directory only after the first valid sample.
         self.folder = None
@@ -243,16 +247,19 @@ class AgilePilotNode:
             TwistStamped,
             queue_size=1,
         )
-        self.debug_img1_pub = rospy.Publisher(
-            "/debug_img1",
-            Image,
-            queue_size=1,
-        )
-        self.debug_img2_pub = rospy.Publisher(
-            "/debug_img2",
-            Image,
-            queue_size=1,
-        )
+        self.debug_img1_pub = None
+        self.debug_img2_pub = None
+        if not self.benchmark_mode:
+            self.debug_img1_pub = rospy.Publisher(
+                "/debug_img1",
+                Image,
+                queue_size=1,
+            )
+            self.debug_img2_pub = rospy.Publisher(
+                "/debug_img2",
+                Image,
+                queue_size=1,
+            )
 
         # Logic subscribers
         self.start_sub = rospy.Subscriber(
@@ -313,13 +320,15 @@ class AgilePilotNode:
             queue_size=1,
             tcp_nodelay=True,
         )
-        self.rgb_img_sub = rospy.Subscriber(
-            "/" + quad_name + "/dodgeros_pilot/unity/image",
-            Image,
-            self.rgb_callback,
-            queue_size=1,
-            tcp_nodelay=True,
-        )
+        self.rgb_img_sub = None
+        if not self.benchmark_mode:
+            self.rgb_img_sub = rospy.Subscriber(
+                "/" + quad_name + "/dodgeros_pilot/unity/image",
+                Image,
+                self.rgb_callback,
+                queue_size=1,
+                tcp_nodelay=True,
+            )
 
 
         print("[RUN_COMPETITION] Initialization completed!")
@@ -535,7 +544,7 @@ class AgilePilotNode:
             return
         
         # print('[RUN_COMPETITION] calling compute_command_vision_based')
-        start_compute_time = time.time()
+        start_compute_time = time.time() if self.inference_timing_logs else None
 
         command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(
             state_snapshot, img, self.frame_history, self.desiredVel, self.model,
@@ -545,10 +554,11 @@ class AgilePilotNode:
             return
 
         # publish debug images
-        self.debug_img1_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img1, encoding="passthrough"))
-        self.debug_img2_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img2, encoding="passthrough"))
+        if not self.benchmark_mode:
+            self.debug_img1_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img1, encoding="passthrough"))
+            self.debug_img2_pub.publish(self.cv_bridge.cv2_to_imgmsg(debug_img2, encoding="passthrough"))
 
-        if self.ctr % 30 == 0:
+        if self.inference_timing_logs and self.ctr % 30 == 0:
             print(f'[RUN_COMPETITION] compute_command_vision_based took {time.time() - start_compute_time} seconds')
 
         self.publish_command(command)

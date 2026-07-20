@@ -11,21 +11,52 @@ from envtest.benchmark.run_benchmark import (
     DEFAULT_CONFIG,
     build_parser,
     empty_result,
+    load,
     result_needs_rerun,
     resolve_output_path,
     run_one,
     run_attempt,
+    timing_metrics,
     upsert_result,
 )
 
 
 class RunnerTest(unittest.TestCase):
+    def test_stage_markers_produce_nonzero_durations(self):
+        timing = {"stages": {
+            "simulator_ready": 2.0,
+            "pilot_prepare_start": 2.0,
+            "pilot_ready": 3.0,
+            "controller_start": 3.5,
+            "navigation_started": 4.0,
+            "rollout_finished": 8.0,
+            "cleanup_start": 8.0,
+            "cleanup_finished": 9.0,
+        }}
+        metrics = timing_metrics(timing, 1.0, 9.5)
+        self.assertEqual(metrics["case_wall_seconds"], 8.5)
+        self.assertEqual(metrics["simulator_ready_seconds"], 1.0)
+        self.assertEqual(metrics["pilot_prepare_seconds"], 1.0)
+        self.assertEqual(metrics["controller_startup_seconds"], 0.5)
+        self.assertEqual(metrics["rollout_wall_seconds"], 4.0)
+        self.assertEqual(metrics["cleanup_seconds"], 1.0)
+
+    def test_missing_stage_marker_is_blank(self):
+        metrics = timing_metrics({"stages": {}}, 1.0, 2.0)
+        self.assertEqual(metrics["case_wall_seconds"], 1.0)
+        self.assertEqual(metrics["controller_startup_seconds"], "")
+
     def test_default_inputs_are_forest_ablation_files(self):
         args = build_parser().parse_args(["--policy", "single"])
         self.assertEqual(args.config, DEFAULT_CONFIG)
         self.assertEqual(args.cases, DEFAULT_CASES)
         self.assertEqual(args.simulator_retries, 1)
         self.assertEqual(args.case_id, [])
+
+    def test_default_config_uses_shared_simulator_at_1_5x(self):
+        execution = load(DEFAULT_CONFIG)["execution"]
+        self.assertEqual(execution["real_time_factor"], 1.5)
+        self.assertTrue(execution["reuse_simulator"])
 
     def test_exact_case_filter_is_repeatable(self):
         args = build_parser().parse_args([
@@ -124,8 +155,19 @@ class RunnerTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(KeyboardInterrupt):
-                run_attempt({}, {"id": "single"}, case, Path(directory), 1)
+                run_attempt(
+                    {"evaluation_profiles": {"strict": {"plots": True, "terminate_on_collision": True}}},
+                    {"id": "single"},
+                    case,
+                    Path(directory),
+                    1,
+                )
         mocked_terminate.assert_called_once_with(process)
+        self.assertEqual(mocked_popen.call_args.kwargs["env"]["VITFLY_EVAL_PLOTS"], "true")
+        self.assertEqual(
+            mocked_popen.call_args.kwargs["env"]["VITFLY_EVAL_TERMINATE_ON_COLLISION"],
+            "true",
+        )
 
 
 if __name__ == "__main__":

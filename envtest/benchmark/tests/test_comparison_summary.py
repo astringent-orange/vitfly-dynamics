@@ -11,7 +11,10 @@ from envtest.benchmark.summarize_comparison import (
     latest_comparison_result_paths,
     validate_comparison_coverage,
 )
-from envtest.benchmark.summarize_results import build_factor_figure, plot_factor_sweeps
+from envtest.benchmark.summarize_results import (
+    build_factor_figure,
+    plot_factor_sweeps,
+)
 
 
 class ComparisonSummaryTest(unittest.TestCase):
@@ -75,7 +78,9 @@ class ComparisonSummaryTest(unittest.TestCase):
             )
             self.assertEqual(
                 {path.name for path in output.glob("*.png")},
-                {spec["filename"] for spec in COMPARISON_FACTOR_SPECS},
+                {
+                    *[spec["filename"] for spec in COMPARISON_FACTOR_SPECS],
+                },
             )
             for spec in COMPARISON_FACTOR_SPECS:
                 self.assertTrue((output / spec["filename"]).stat().st_size > 0)

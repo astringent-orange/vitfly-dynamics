@@ -1,4 +1,5 @@
 import os
+import threading
 import yaml
 import rospy
 import numpy as np
@@ -10,10 +11,40 @@ from std_msgs.msg import Empty
 from uniplot import plot
 
 
+def parse_bool(value, name):
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError("%s must be a boolean value" % name)
+
+
+def terminal_plots_enabled(config):
+    configured = config.get("plots", True)
+    if "VITFLY_EVAL_PLOTS" in os.environ:
+        configured = os.environ["VITFLY_EVAL_PLOTS"]
+    if os.environ.get("VITFLY_BENCHMARK_MODE", "0") == "1":
+        return False
+    return parse_bool(configured, "VITFLY_EVAL_PLOTS")
+
+
 class Evaluator:
     def __init__(self, config):
         rospy.init_node("evaluator", anonymous=False)
         self.config = config
+        self.plots_enabled = terminal_plots_enabled(config)
+        self.benchmark_mode = os.environ.get("VITFLY_BENCHMARK_MODE", "0") == "1"
+        collision_setting = config.get("terminate_on_collision", False)
+        if "VITFLY_EVAL_TERMINATE_ON_COLLISION" in os.environ:
+            collision_setting = os.environ["VITFLY_EVAL_TERMINATE_ON_COLLISION"]
+        self.terminate_on_collision = self.benchmark_mode and parse_bool(
+            collision_setting, "VITFLY_EVAL_TERMINATE_ON_COLLISION"
+        )
+        self.finish_lock = threading.Lock()
+        self.finished = False
 
         self.xmax = int(float(os.environ.get("VITFLY_EVAL_GOAL_X", self.config["target"])))
 
@@ -24,6 +55,16 @@ class Evaluator:
 
         self.hit_obstacle = False
         self.crash = 0
+        self.dynamic_collision = False
+        self.dynamic_encounter_margin = float(
+            os.environ.get("VITFLY_DYNAMIC_ENCOUNTER_MARGIN", "2.0")
+        )
+        self.altitudes = []
+        self.dynamic_clearances = []
+        self.dynamic_encounter_count = 0
+        self.dynamic_interaction_time = 0.0
+        self.dynamic_in_encounter = False
+        self.dynamic_last_timestamp = None
         self.timeout = float(os.environ.get("VITFLY_EVAL_TIMEOUT_SECONDS", self.config["timeout"]))
         self.collision_margin = float(os.environ.get("VITFLY_EVAL_COLLISION_MARGIN", "0.0"))
         bounds_text = os.environ.get("VITFLY_EVAL_BOUNDING_BOX", "")
@@ -59,6 +100,14 @@ class Evaluator:
             tcp_nodelay=True,
         )
 
+        self.dynamic_obstacle_sub = rospy.Subscriber(
+            "/%s/dodgeros_pilot/groundtruth/dynamic_obstacles" % config["quad_name"],
+            ObstacleArray,
+            self.callbackDynamicObstacles,
+            queue_size=1,
+            tcp_nodelay=True,
+        )
+
         self.start_sub = rospy.Subscriber(
             "/%s/%s" % (config["quad_name"], config["start"]),
             Empty,
@@ -79,11 +128,16 @@ class Evaluator:
         # Persist the evaluator result before asking the controller to stop.
         # Otherwise the launcher can observe the controller exit first and
         # overwrite a successful rollout with controller_error.
-        self.printSummary()
-        self.finish_pub.publish()
-        if self.config["plots"]:
-            self.printPlots()
-        rospy.signal_shutdown("Completed Evaluation")
+        with self.finish_lock:
+            if self.finished:
+                return
+            self.finished = True
+            self.is_active = False
+            self.printSummary()
+            self.finish_pub.publish()
+            if self.plots_enabled:
+                self.printPlots()
+            rospy.signal_shutdown("Completed Evaluation")
 
     def callbackState(self, msg):
 
@@ -106,6 +160,7 @@ class Evaluator:
             ]
         )
         self.pos.append(pos)
+        self.altitudes.append(float(msg.pose.position.z))
 
         bin_x = int(max(min(np.floor(self.pos_x), self.xmax), 0))
         if np.isnan(self.time_array[bin_x]):
@@ -133,7 +188,7 @@ class Evaluator:
         # self.time_array[0] = rospy.get_rostime().to_sec()
 
     def callbackObstacles(self, msg):
-        if not self.is_active:
+        if not self.is_active or self.finished:
             return
 
         if not msg.obstacles:
@@ -148,22 +203,73 @@ class Evaluator:
                 self.crash += 1
                 print("Crashed")
             self.hit_obstacle = True
+            if self.terminate_on_collision and self.crash == 1:
+                self.termination_reason = "collision"
+                self.abortRun()
+                return
         else:
             self.hit_obstacle = False
 
+    def callbackDynamicObstacles(self, msg):
+        """Record dynamic-obstacle encounters separately from total collisions."""
+        if not self.is_active or self.finished:
+            return
+        timestamp = getattr(msg, "t", None)
+        if timestamp in (None, 0):
+            timestamp = msg.header.stamp.to_sec()
+        timestamp = float(timestamp)
+        if self.dynamic_last_timestamp is not None and self.dynamic_in_encounter:
+            self.dynamic_interaction_time += max(0.0, timestamp - self.dynamic_last_timestamp)
+        self.dynamic_last_timestamp = timestamp
+
+        if not msg.obstacles:
+            self.dynamic_in_encounter = False
+            return
+        margin = min(
+            np.linalg.norm(np.array([obs.position.x, obs.position.y, obs.position.z])) - obs.scale
+            for obs in msg.obstacles
+        )
+        self.dynamic_clearances.append(float(margin))
+        if margin < self.collision_margin:
+            self.dynamic_collision = True
+        in_encounter = margin <= self.dynamic_encounter_margin
+        if in_encounter and not self.dynamic_in_encounter:
+            self.dynamic_encounter_count += 1
+        self.dynamic_in_encounter = in_encounter
+
+    def diagnostic_summary(self):
+        return {
+            "altitude_min": min(self.altitudes) if self.altitudes else "",
+            "altitude_mean": float(np.mean(self.altitudes)) if self.altitudes else "",
+            "altitude_max": max(self.altitudes) if self.altitudes else "",
+            "min_dynamic_clearance": min(self.dynamic_clearances) if self.dynamic_clearances else "",
+            "dynamic_encounter_count": int(self.dynamic_encounter_count),
+            "dynamic_interaction_time": float(self.dynamic_interaction_time),
+            "dynamic_collision": bool(self.dynamic_collision),
+        }
+
     def abortRun(self):
-        print("You did not reach the goal!")
-        self.is_active = False
-        summary = {}
-        summary["Success"] = False
-        summary["goal_reached"] = bool(self.goal_reached)
-        summary["collision"] = bool(self.crash > 0)
-        summary["collision_count"] = int(self.crash)
-        summary["termination_reason"] = self.termination_reason or ("collision" if self.crash else "timeout")
-        if self.time_array[0] == self.time_array[0]:
-            summary["termination_elapsed_time"] = rospy.get_time() - self.time_array[0]
-        self.writeSummary(summary)
-        rospy.signal_shutdown("Completed Evaluation")
+        with self.finish_lock:
+            if self.finished:
+                return
+            self.finished = True
+            print("You did not reach the goal!")
+            self.is_active = False
+            summary = {}
+            summary["Success"] = False
+            summary["goal_reached"] = bool(self.goal_reached)
+            summary["collision"] = bool(self.crash > 0)
+            summary["collision_count"] = int(self.crash)
+            summary["termination_reason"] = self.termination_reason or ("collision" if self.crash else "timeout")
+            summary.update(self.diagnostic_summary() if hasattr(self, "diagnostic_summary") else {})
+            if self.time_array[0] == self.time_array[0]:
+                summary["termination_elapsed_time"] = rospy.get_time() - self.time_array[0]
+            self.writeSummary(summary)
+            # Persist the result before stopping the controller, just as in
+            # the successful path. This keeps collision termination a normal
+            # rollout result instead of a controller_error.
+            self.finish_pub.publish()
+            rospy.signal_shutdown("Completed Evaluation")
 
     def writeSummary(self, summary):
         payload = summary
@@ -196,6 +302,7 @@ class Evaluator:
         summary["number_crashes"] = self.crash
         summary["collision_count"] = self.crash
         summary["termination_elapsed_time"] = ttf
+        summary.update(self.diagnostic_summary() if hasattr(self, "diagnostic_summary") else {})
         self.writeSummary(summary)
 
     def printPlots(self):

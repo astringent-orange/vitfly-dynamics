@@ -8,6 +8,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.h>
 #include <ros/ros.h>
+#include <std_srvs/Trigger.h>
 
 // #include <filesystem>
 
@@ -37,6 +38,9 @@ class VisionSim {
 
  private:
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
+  bool resetBenchmarkCallback(std_srvs::Trigger::Request& request,
+                              std_srvs::Trigger::Response& response);
+  bool resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases);
 
   void simLoop();
   void publishState(const QuadState& state);
@@ -46,6 +50,7 @@ class VisionSim {
 
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber reset_sub_;
+  ros::ServiceServer reset_benchmark_service_;
   ros::Publisher odometry_pub_;
   ros::Publisher state_pub_;
   ros::Publisher clock_pub_;
@@ -66,7 +71,11 @@ class VisionSim {
   int step_counter_ = 0;
   Scalar real_time_factor_ = 1.0;
   bool render_ = false;
+  bool publish_rgb_ = true;
+  bool publish_optical_flow_ = true;
   ros::WallTime t_start_;
+  Scalar sim_time_offset_ = 0.0;
+  Scalar last_published_time_ = 0.0;
 
   std::string agi_param_directory_;
   std::string ros_param_directory_;

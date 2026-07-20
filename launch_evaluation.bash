@@ -30,6 +30,10 @@ policy_config="${VITFLY_POLICY_CONFIG:-}"
 case_config="${VITFLY_CASE_CONFIG:-}"
 evaluation_profile="${VITFLY_EVALUATION_PROFILE:-strict}"
 result_path="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
+real_time_factor="${VITFLY_REAL_TIME_FACTOR:-}"
+reuse_simulator="${VITFLY_REUSE_SIMULATOR:-0}"
+simulator_session_id="${VITFLY_SIMULATOR_SESSION_ID:-}"
+python_bin="${VITFLY_PYTHON:-python3}"
 
 for arg in "${@:3}"
 do
@@ -75,6 +79,12 @@ do
   elif [[ "$arg" == result_path=* ]]
   then
     result_path="${arg#result_path=}"
+  elif [[ "$arg" == real_time_factor=* ]]
+  then
+    real_time_factor="${arg#real_time_factor=}"
+  elif [ "$arg" = "reuse_simulator" ] || [ "$arg" = "external_simulator" ]
+  then
+    reuse_simulator=1
   elif [ "$arg" = "benchmark_mode" ]
   then
     benchmark_mode=1
@@ -125,7 +135,12 @@ then
   echo "[LAUNCH SCRIPT] Vision based!"
   echo
   run_competition_args="--vision_based"
-  realtimefactor=""
+  if [ -n "$real_time_factor" ]
+  then
+    realtimefactor="real_time_factor:=$real_time_factor"
+  else
+    realtimefactor=""
+  fi
   rviz_enabled=True
 elif [ "$2" = "state" ]
 then
@@ -157,6 +172,25 @@ fi
 if ((force_rviz))
 then
   rviz_enabled=True
+fi
+
+publish_rgb=True
+publish_optical_flow=True
+
+# Batch benchmarks are headless by design.  Apply this after the optional
+# rviz/debug override so no benchmark invocation can accidentally launch RViz
+# or publish image modalities that the policy does not consume.
+if [ "$benchmark_mode" = "1" ]
+then
+  rviz_enabled=False
+  publish_rgb=False
+  publish_optical_flow=False
+fi
+
+if [ "$reuse_simulator" = "1" ] && [ "$benchmark_mode" != "1" ]
+then
+  echo "[LAUNCH SCRIPT] reuse_simulator is only valid in benchmark mode."
+  exit 1
 fi
 
 # Set Flightmare Path if it is not set
@@ -211,6 +245,54 @@ wait_for_sim_topics() {
   return 0
 }
 
+publish_empty_control() {
+  topic_name="$1"
+  minimum_subscribers="${2:-1}"
+  connect_timeout="${3:-5}"
+  acknowledgement="${4:-}"
+  if [ "$benchmark_mode" = "1" ]
+  then
+    control_args=(
+      --topic "$topic_name"
+      --type empty
+      --min-subscribers "$minimum_subscribers"
+      --connect-timeout "$connect_timeout"
+    )
+    if [ -n "$acknowledgement" ]
+    then
+      control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
+    fi
+    "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
+  else
+    rostopic pub "$topic_name" std_msgs/Empty "{}" --once
+  fi
+}
+
+publish_bool_control() {
+  topic_name="$1"
+  value="$2"
+  minimum_subscribers="${3:-1}"
+  connect_timeout="${4:-5}"
+  acknowledgement="${5:-}"
+  if [ "$benchmark_mode" = "1" ]
+  then
+    control_args=(
+      --topic "$topic_name"
+      --type bool
+      --value "$value"
+      --min-subscribers "$minimum_subscribers"
+      --connect-timeout "$connect_timeout"
+    )
+    if [ -n "$acknowledgement" ]
+    then
+      control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
+    fi
+    "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
+  else
+    rostopic pub "$topic_name" std_msgs/Bool "data: $value" --once
+  fi
+}
+
 wait_for_process_exit() {
   process_name="$1"
   timeout_s="${2:-10}"
@@ -243,7 +325,7 @@ wait_for_pid_exit() {
 
 simulator_stack_running() {
   local process_name
-  for process_name in roslaunch visionsim_node flight_render dodgeros_pilot roscore rosmaster rosout gzserver gzclient
+  for process_name in roslaunch visionsim_node flight_render vitfly-unity.x86_64 RPG_Flightmare.x86_64 dodgeros_pilot roscore rosmaster rosout gzserver gzclient
   do
     if pgrep -x "$process_name" >/dev/null
     then
@@ -269,8 +351,9 @@ wait_for_simulator_shutdown() {
 
 signal_simulator_stack() {
   signal_name="$1"
-  killall "-$signal_name" roslaunch visionsim_node flight_render dodgeros_pilot \
-    roscore rosmaster rosout gzserver gzclient RPG_Flightmare. rviz 2>/dev/null
+  killall "-$signal_name" roslaunch visionsim_node flight_render vitfly-unity.x86_64 \
+    RPG_Flightmare.x86_64 dodgeros_pilot roscore rosmaster rosout gzserver gzclient \
+    RPG_Flightmare. rviz 2>/dev/null
   return 0
 }
 
@@ -287,6 +370,13 @@ ensure_environment_exists() {
 }
 
 launch_simulator() {
+  if [ "$reuse_simulator" = "1" ]
+  then
+    wait_for_ros_master 45 || return 1
+    wait_for_sim_topics || return 1
+    benchmark_stage simulator_ready
+    return 0
+  fi
   if [ "$benchmark_mode" != "1" ] && pgrep -x visionsim_node >/dev/null && ros_master_ready
   then
     ROS_PID=""
@@ -297,11 +387,13 @@ launch_simulator() {
   if pgrep -x visionsim_node >/dev/null
   then
     echo "[LAUNCH SCRIPT] Found stale visionsim_node without ROS master, cleaning it before launch."
-    killall -9 visionsim_node flight_render dodgeros_pilot 2>/dev/null
+    killall -9 visionsim_node flight_render vitfly-unity.x86_64 RPG_Flightmare.x86_64 dodgeros_pilot 2>/dev/null
     wait_for_process_exit visionsim_node 10
   fi
 
-  roslaunch envsim visionenv_sim.launch render:=True gui:=False rviz:=$rviz_enabled $realtimefactor &
+  roslaunch envsim visionenv_sim.launch render:=True gui:=False \
+    rviz:=$rviz_enabled publish_rgb:=$publish_rgb \
+    publish_optical_flow:=$publish_optical_flow $realtimefactor &
   ROS_PID="$!"
   echo $ROS_PID
 
@@ -311,8 +403,16 @@ launch_simulator() {
     return 1
   fi
 
-  sleep 10
+  sleep 5
   wait_for_sim_topics || return 1
+  benchmark_stage simulator_ready
+}
+
+benchmark_stage() {
+  if [ "$benchmark_mode" = "1" ]
+  then
+    echo "[BENCHMARK_STAGE] $1"
+  fi
 }
 
 stop_simulator() {
@@ -361,23 +461,53 @@ force_stop_simulator() {
 prepare_pilot_for_rollout() {
   local attempt
   local maximum_attempts=2
-  if [ "$benchmark_mode" = "1" ]
+  if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     maximum_attempts=1
   fi
   for attempt in $(seq 1 "$maximum_attempts")
   do
     echo "[LAUNCH SCRIPT] Preparing low-level pilot (attempt $attempt/$maximum_attempts)"
-    rostopic pub /kingfisher/dodgeros_pilot/off std_msgs/Empty "{}" --once
-    sleep 1
-    rostopic pub /kingfisher/dodgeros_pilot/reset_sim std_msgs/Empty "{}" --once
-    sleep 1
-    rostopic pub /kingfisher/dodgeros_pilot/enable std_msgs/Bool "data: true" --once
-    sleep 1
-    rostopic pub /kingfisher/dodgeros_pilot/start std_msgs/Empty "{}" --once
-
-    if python3 ./envtest/ros/wait_for_pilot_hover.py --timeout 30
+    benchmark_stage pilot_prepare_start
+    if ! publish_empty_control /kingfisher/dodgeros_pilot/off 1 5 pilot_off && \
+       [ "$benchmark_mode" = "1" ]
     then
+      return 1
+    fi
+    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
+    if [ "$reuse_simulator" = "1" ]
+    then
+      reset_response=""
+      if ! rosparam set /kingfisher/dodgeros_pilot/dynamic_phase_seed "$VITFLY_DYNAMIC_PHASE_SEED" || \
+         ! reset_response=$(rosservice call /kingfisher/dodgeros_pilot/reset_benchmark "{}") || \
+         ! printf '%s\n' "$reset_response" | grep -Eiq 'success:[[:space:]]*(true|1)'
+      then
+        echo "[LAUNCH SCRIPT] ERROR: benchmark simulator reset service failed."
+        return 1
+      fi
+    else
+      if ! publish_empty_control /kingfisher/dodgeros_pilot/reset_sim 1 5 pilot_reset && \
+         [ "$benchmark_mode" = "1" ]
+      then
+        return 1
+      fi
+    fi
+    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
+    if ! publish_bool_control /kingfisher/dodgeros_pilot/enable true 1 5 pilot_enabled && \
+       [ "$benchmark_mode" = "1" ]
+    then
+      return 1
+    fi
+    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
+    if ! publish_empty_control /kingfisher/dodgeros_pilot/start 1 5 && \
+       [ "$benchmark_mode" = "1" ]
+    then
+      return 1
+    fi
+
+    if "$python_bin" ./envtest/ros/wait_for_pilot_hover.py --timeout 30
+    then
+      benchmark_stage pilot_ready
       return 0
     fi
 
@@ -398,7 +528,7 @@ stop_controller() {
   fi
   if kill -0 "$COMP_PID" 2>/dev/null
   then
-    rostopic pub /kingfisher/finish_navigation std_msgs/Empty "{}" --once >/dev/null 2>&1
+    publish_empty_control /kingfisher/finish_navigation 1 1 >/dev/null 2>&1 || true
     if ! wait_for_pid_exit "$COMP_PID" 5
     then
       kill -SIGINT "$COMP_PID" 2>/dev/null
@@ -486,9 +616,10 @@ cleanup_on_exit() {
   cleanup_in_progress=1
   trap - EXIT INT TERM
 
+  benchmark_stage cleanup_start
   stop_evaluator
   stop_controller
-  if [ "$benchmark_mode" = "1" ]
+  if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     if ! force_stop_simulator && [ "$original_status" -eq 0 ]
     then
@@ -497,6 +628,7 @@ cleanup_on_exit() {
   else
     stop_simulator
   fi
+  benchmark_stage cleanup_finished
   exit "$original_status"
 }
 
@@ -517,7 +649,7 @@ else
   export VITFLY_ENV_SEED="${VITFLY_ENV_SEED:-10}"
   export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$VITFLY_ENV_SEED}"
   ensure_environment_exists || simulator_error_exit
-  if [ "$benchmark_mode" = "1" ]
+  if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     force_stop_simulator || simulator_error_exit
   fi
@@ -582,16 +714,38 @@ do
   echo "$ROLLOUT_NAME"
 
   rm -f ./envtest/ros/summary.yaml ./envtest/ros/.summary.yaml.tmp
+  benchmark_stage controller_start
   cd ./envtest/ros/
-  python3 evaluation_node.py ${datetime}_N$i &
+  "$python_bin" evaluation_node.py ${datetime}_N$i &
   PY_PID="$!"
 
-  python3 run_competition.py $run_competition_args --des_vel "$des_vel" \
+  "$python_bin" run_competition.py $run_competition_args --des_vel "$des_vel" \
     --offset "$offset" --model_path "$model_path" &
   COMP_PID="$!"
   cd -
 
-  wait_for_topic /kingfisher/start_navigation 30 || simulator_error_exit
+  if [ "$benchmark_mode" = "1" ]
+  then
+    echo
+    echo [LAUNCH_EVALUATION] Sending start navigation command
+    echo
+    if ! publish_empty_control /kingfisher/start_navigation 2 30
+    then
+      if ! ps -p $COMP_PID > /dev/null
+      then
+        echo "[LAUNCH_EVALUATION] Controller exited before navigation could start."
+        batch_failed=1
+        stop_evaluator
+        write_rollout_failure_summary controller_error
+      else
+        simulator_error_exit
+      fi
+    else
+      benchmark_stage navigation_started
+    fi
+  else
+    wait_for_topic /kingfisher/start_navigation 30 || simulator_error_exit
+  fi
 
   start_time=$(date +%s)
   # Wait until the evaluation script has finished
@@ -621,11 +775,16 @@ do
       write_rollout_failure_summary controller_error
       break
     fi
-    echo
-    echo [LAUNCH_EVALUATION] Sending start navigation command
-    echo
-    rostopic pub /kingfisher/start_navigation std_msgs/Empty "{}" --once
-    sleep 2
+    if [ "$benchmark_mode" = "1" ]
+    then
+      sleep 1
+    else
+      echo
+      echo [LAUNCH_EVALUATION] Sending start navigation command
+      echo
+      publish_empty_control /kingfisher/start_navigation
+      sleep 2
+    fi
 
     # if the current iteration has surpassed the time limit, something went wrong (possibly: [Pipeline]     Bridge failed!). Kill the simulator.
     if ((($(date +%s) - start_time) >= 300))
@@ -655,15 +814,18 @@ do
 
   cat "$SUMMARY_FILE" "./envtest/ros/summary.yaml" > "tmp.yaml"
   mv "tmp.yaml" "$SUMMARY_FILE"
+  benchmark_stage rollout_finished
 
+  benchmark_stage cleanup_start
   stop_controller
-  if [ "$benchmark_mode" = "1" ]
+  if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     force_stop_simulator || batch_infrastructure_failed=1
   elif ((random_env))
   then
     stop_simulator
   fi
+  benchmark_stage cleanup_finished
 
   if ((batch_infrastructure_failed))
   then
@@ -679,6 +841,6 @@ fi
 if [ "$2" = "state" ]
 then
   echo "[LAUNCH SCRIPT] Curating the completed state-collection batch."
-  python3 ./envtest/ros/curate_dataset.py ./envtest/ros/train_set \
+  "$python_bin" ./envtest/ros/curate_dataset.py ./envtest/ros/train_set \
     --evaluation "$SUMMARY_FILE" --latest "$N" --apply || exit 1
 fi

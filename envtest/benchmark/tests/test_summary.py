@@ -117,7 +117,9 @@ class SummaryTest(unittest.TestCase):
             plot_factor_sweeps(summaries, output)
             self.assertEqual(
                 {path.name for path in output.glob("*.png")},
-                {spec["filename"] for spec in FACTOR_SPECS},
+                {
+                    *[spec["filename"] for spec in FACTOR_SPECS],
+                },
             )
 
         for spec in FACTOR_SPECS:
@@ -125,9 +127,49 @@ class SummaryTest(unittest.TestCase):
             self.assertEqual(len(axes), 3)
             self.assertEqual(list(axes[2].get_xticks()), list(spec["x_values"]))
             self.assertEqual(len(axes[0].get_legend_handles_labels()[1]), 3)
+            self.assertIsNone(axes[0].get_legend())
+            self.assertEqual(len(figure.legends), 1)
+            self.assertEqual(
+                [text.get_text() for text in figure.legends[0].get_texts()],
+                ["单帧", "相邻双帧", "隔帧双帧"],
+            )
+            self.assertTrue(all(text.get_fontsize() == 12 for text in figure.legends[0].get_texts()))
+            self.assertEqual(len(axes[0].lines), 3)
             self.assertEqual(len(axes[1].lines), 3)
             self.assertEqual(len(axes[2].lines), 3)
+            self.assertEqual(len(axes[0].collections), 0)
+            self.assertGreater(axes[0].get_ylim()[0], 0.0)
+            self.assertLess(axes[1].get_ylim()[1], 1.0)
+            for axis in axes[:2]:
+                tick_spacing = axis.get_yticks()[1] - axis.get_yticks()[0]
+                self.assertAlmostEqual(tick_spacing, 0.04)
+            self.assertLessEqual(len(axes[2].get_yticks()), 7)
+            self.assertEqual([axis.get_ylabel() for axis in axes], ["", "", ""])
+            self.assertEqual(
+                [axis.texts[-1].get_text() for axis in axes],
+                [
+                    "成功率",
+                    "碰撞率",
+                    "成功飞行时间中位数（秒）",
+                ],
+            )
+            self.assertTrue(all(axis.texts[-1].get_position()[1] < 0 for axis in axes))
+            self.assertEqual(figure._suptitle.get_text(), spec["xlabel_zh"])
+            width, height = figure.get_size_inches()
+            self.assertGreater(width, height)
+            positions = [axis.get_position() for axis in axes]
+            self.assertLess(positions[0].x0, positions[1].x0)
+            self.assertLess(positions[1].x0, positions[2].x0)
+            self.assertAlmostEqual(positions[0].y0, positions[1].y0)
+            self.assertAlmostEqual(positions[1].y0, positions[2].y0)
             plt.close(figure)
+
+    def test_only_dynamic_and_flight_factors_remain(self):
+        self.assertEqual([spec["filename"] for spec in FACTOR_SPECS], [
+            "ablation_dynamic_speed.png", "ablation_flight_speed.png",
+        ])
+        self.assertEqual(FACTOR_SPECS[0]["x_values"], (1.0, 2.0, 3.0, 4.0))
+        self.assertEqual(FACTOR_SPECS[1]["x_values"], (2.0, 4.0, 6.0, 8.0))
 
     def test_missing_successful_time_is_an_empty_plot_point(self):
         try:
@@ -148,7 +190,7 @@ class SummaryTest(unittest.TestCase):
         plt.close(figure)
 
     def complete_integrity_rows(self):
-        expected = {f"c{index}" for index in range(140)}
+        expected = {f"c{index}" for index in range(400)}
         rows = [
             {
                 "policy_id": policy,
@@ -167,13 +209,10 @@ class SummaryTest(unittest.TestCase):
         rows[0]["runner_returncode"] = "2"
         validate_result_integrity(rows, expected, ("single", "adjacent", "skip_one"))
 
-    def test_integrity_rejects_21_of_140_and_duplicate_cases(self):
+    def test_integrity_rejects_incomplete_and_duplicate_cases(self):
         expected, rows = self.complete_integrity_rows()
-        incomplete = [
-            row for row in rows
-            if row["policy_id"] != "single" or int(row["case_id"][1:]) < 21
-        ]
-        with self.assertRaisesRegex(ValueError, "21/140"):
+        incomplete = [row for row in rows if row["policy_id"] != "single" or int(row["case_id"][1:]) < 21]
+        with self.assertRaisesRegex(ValueError, "21/400"):
             validate_result_integrity(incomplete, expected, ("single", "adjacent", "skip_one"))
         with self.assertRaisesRegex(ValueError, "duplicate result"):
             validate_result_integrity(rows + [dict(rows[0])], expected, ("single", "adjacent", "skip_one"))

@@ -11,3 +11,7 @@ bounding_box: [-5, 65, -10, 10, 0, 10] # when exiting this bounding box, the epi
 
 # if you really don't want the cool plots, put this to False
 plots: True
+
+# Benchmark overrides this through VITFLY_EVAL_TERMINATE_ON_COLLISION.
+# Manual evaluation and data collection keep the original full-flight behavior.
+terminate_on_collision: False

@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import sys
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -53,13 +55,85 @@ class EvaluationLifecycleTest(unittest.TestCase):
         rospy.signal_shutdown = lambda _reason: events.append("shutdown")
 
         evaluator = types.SimpleNamespace(
+            finish_lock=threading.Lock(),
+            finished=False,
+            is_active=True,
             printSummary=lambda: events.append("summary"),
             finish_pub=types.SimpleNamespace(publish=lambda: events.append("finish")),
             printPlots=lambda: events.append("plots"),
-            config={"plots": False},
+            plots_enabled=False,
         )
         module.Evaluator.publishFinish(evaluator)
         self.assertEqual(events, ["summary", "finish", "shutdown"])
+
+    def test_collision_abort_persists_result_and_finishes_once(self):
+        module, rospy = load_evaluation_node()
+        events = []
+        rospy.get_time = lambda: 4.0
+        rospy.signal_shutdown = lambda _reason: events.append("shutdown")
+        evaluator = types.SimpleNamespace(
+            finish_lock=threading.Lock(),
+            finished=False,
+            is_active=True,
+            goal_reached=False,
+            crash=1,
+            termination_reason="collision",
+            time_array=[1.0],
+            writeSummary=lambda _summary: events.append("summary"),
+            finish_pub=types.SimpleNamespace(publish=lambda: events.append("finish")),
+        )
+        module.Evaluator.abortRun(evaluator)
+        module.Evaluator.abortRun(evaluator)
+        self.assertEqual(events, ["summary", "finish", "shutdown"])
+        self.assertTrue(evaluator.finished)
+        self.assertFalse(evaluator.is_active)
+
+    def test_dynamic_obstacle_diagnostics_record_encounter_and_clearance(self):
+        module, _rospy = load_evaluation_node()
+        obstacle = types.SimpleNamespace(
+            position=types.SimpleNamespace(x=1.0, y=0.0, z=0.0),
+            scale=0.5,
+        )
+        message = types.SimpleNamespace(t=1.0, obstacles=[obstacle])
+        evaluator = types.SimpleNamespace(
+            is_active=True,
+            finished=False,
+            dynamic_last_timestamp=None,
+            dynamic_in_encounter=False,
+            dynamic_interaction_time=0.0,
+            dynamic_clearances=[],
+            dynamic_encounter_count=0,
+            dynamic_encounter_margin=2.0,
+            collision_margin=0.0,
+            dynamic_collision=False,
+        )
+        module.Evaluator.callbackDynamicObstacles(evaluator, message)
+        self.assertEqual(evaluator.dynamic_encounter_count, 1)
+        self.assertAlmostEqual(evaluator.dynamic_clearances[0], 0.5)
+        self.assertFalse(evaluator.dynamic_collision)
+
+        message.t = 2.0
+        module.Evaluator.callbackDynamicObstacles(evaluator, message)
+        self.assertAlmostEqual(evaluator.dynamic_interaction_time, 1.0)
+
+    def test_benchmark_forces_terminal_plots_off(self):
+        module, _rospy = load_evaluation_node()
+        with patch.dict(
+            os.environ,
+            {"VITFLY_BENCHMARK_MODE": "1", "VITFLY_EVAL_PLOTS": "true"},
+            clear=False,
+        ):
+            self.assertFalse(module.terminal_plots_enabled({"plots": True}))
+
+    def test_non_benchmark_honors_plot_configuration_and_override(self):
+        module, _rospy = load_evaluation_node()
+        with patch.dict(os.environ, {"VITFLY_BENCHMARK_MODE": "0"}, clear=False):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("VITFLY_EVAL_PLOTS", None)
+                self.assertTrue(module.terminal_plots_enabled({"plots": True}))
+                self.assertFalse(module.terminal_plots_enabled({"plots": False}))
+            with patch.dict(os.environ, {"VITFLY_EVAL_PLOTS": "false"}, clear=False):
+                self.assertFalse(module.terminal_plots_enabled({"plots": True}))
 
     def test_controller_callback_state_and_publishers_precede_subscribers(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
@@ -75,10 +149,115 @@ class EvaluationLifecycleTest(unittest.TestCase):
 
     def test_launcher_waits_for_result_before_controller_error(self):
         source = (ROOT / "launch_evaluation.bash").read_text()
-        controller_branch = source.index("if ! ps -p $COMP_PID")
+        monitor_loop = source.index("while ps -p $PY_PID")
+        controller_branch = source.index("if ! ps -p $COMP_PID", monitor_loop)
         wait = source.index("wait_for_evaluator_result 5", controller_branch)
         failure = source.index("write_rollout_failure_summary controller_error", controller_branch)
         self.assertLess(wait, failure)
+
+    def test_benchmark_forces_headless_rviz_after_debug_override(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        debug_override = source.index("if ((force_rviz))")
+        benchmark_override = source.index(
+            'if [ "$benchmark_mode" = "1" ]',
+            debug_override,
+        )
+        launch = source.index("launch_simulator()")
+        self.assertLess(debug_override, benchmark_override)
+        self.assertLess(benchmark_override, launch)
+        self.assertIn("rviz_enabled=False", source[benchmark_override:launch])
+
+    def test_benchmark_forces_depth_only_image_topics(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        defaults = source.index("publish_rgb=True")
+        benchmark_override = source.index(
+            'if [ "$benchmark_mode" = "1" ]',
+            defaults,
+        )
+        launch = source.index("launch_simulator()")
+        override_body = source[benchmark_override:launch]
+        self.assertIn("publish_rgb=False", override_body)
+        self.assertIn("publish_optical_flow=False", override_body)
+
+        simulator_launch = (ROOT / "envsim" / "launch" / "visionenv_sim.launch").read_text()
+        self.assertIn('<arg name="publish_rgb" default="True"/>', simulator_launch)
+        self.assertIn('<arg name="publish_optical_flow" default="True"/>', simulator_launch)
+
+        simulator_source = (ROOT / "envsim" / "src" / "visionsim_node.cpp").read_text()
+        self.assertIn("if (publish_rgb_)", simulator_source)
+        self.assertIn("if (publish_optical_flow_)", simulator_source)
+        self.assertIn("if (!camera->getDepthMap(depth))", simulator_source)
+
+    def test_benchmark_controller_skips_rgb_and_debug_image_endpoints(self):
+        source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
+        rgb_initialization = source.index("self.rgb_img_sub = None")
+        rgb_callback = source.index("def rgb_callback", rgb_initialization)
+        rgb_body = source[rgb_initialization:rgb_callback]
+        self.assertIn("if not self.benchmark_mode:", rgb_body)
+        self.assertIn("/dodgeros_pilot/unity/image", rgb_body)
+
+        debug_initialization = source.index("self.debug_img1_pub = None")
+        subscriber_section = source.index("# Logic subscribers", debug_initialization)
+        debug_body = source[debug_initialization:subscriber_section]
+        self.assertIn("if not self.benchmark_mode:", debug_body)
+
+        debug_publish = source.index("self.debug_img1_pub.publish")
+        publish_guard = source.rfind("if not self.benchmark_mode:", 0, debug_publish)
+        self.assertGreater(publish_guard, source.index("def img_callback"))
+
+    def test_benchmark_disables_per_frame_inference_timing(self):
+        source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
+        self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)
+        self.assertIn('timing_default = "false" if self.benchmark_mode else "true"', source)
+        timing_log = source.index("compute_command_vision_based took")
+        guard = source.rfind("if self.inference_timing_logs", 0, timing_log)
+        self.assertGreater(guard, source.index("def img_callback"))
+
+    def test_benchmark_launcher_emits_stage_markers_and_acknowledgements(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        for marker in (
+            "simulator_ready", "pilot_prepare_start", "pilot_ready",
+            "controller_start", "navigation_started", "rollout_finished",
+            "cleanup_start", "cleanup_finished",
+        ):
+            self.assertIn(f"benchmark_stage {marker}", source)
+        for ack in ("pilot_off", "pilot_reset", "pilot_enabled"):
+            self.assertIn(ack, source)
+        self.assertIn("reset_response", source)
+
+    def test_simulator_startup_delay_is_five_seconds(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        launch_start = source.index("launch_simulator()")
+        launch_end = source.index("stop_simulator()", launch_start)
+        launch_body = source[launch_start:launch_end]
+        self.assertIn("sleep 5", launch_body)
+        self.assertNotIn("sleep 10", launch_body)
+
+    def test_benchmark_control_messages_use_connection_aware_publisher(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        empty_helper = source.index("publish_empty_control()")
+        bool_helper = source.index("publish_bool_control()")
+        pilot = source.index("prepare_pilot_for_rollout()")
+        self.assertIn("publish_control_message.py", source[empty_helper:bool_helper])
+        self.assertIn("publish_control_message.py", source[bool_helper:pilot])
+        pilot_end = source.index("stop_controller()", pilot)
+        pilot_body = source[pilot:pilot_end]
+        for topic in ("off", "reset_sim", "enable", "start"):
+            self.assertIn(f"dodgeros_pilot/{topic}", pilot_body)
+
+    def test_benchmark_navigation_start_is_published_before_monitor_loop(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        rollout = source.index("wait_for_topic /kingfisher/start_navigation")
+        benchmark_start = source.rfind('if [ "$benchmark_mode" = "1" ]', 0, rollout)
+        monitor_loop = source.index("while ps -p $PY_PID", rollout)
+        benchmark_setup = source[benchmark_start:monitor_loop]
+        self.assertIn("publish_empty_control /kingfisher/start_navigation 2 30", benchmark_setup)
+        monitor_end = source.index("done", monitor_loop)
+        benchmark_monitor = source[monitor_loop:monitor_end]
+        self.assertNotIn(
+            "publish_empty_control /kingfisher/start_navigation 2 30",
+            benchmark_monitor,
+        )
 
 
 if __name__ == "__main__":

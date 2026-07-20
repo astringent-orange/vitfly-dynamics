@@ -34,7 +34,6 @@ COMPARISON_FACTOR_SPECS = tuple(
     dict(
         spec,
         filename=spec["filename"].replace("ablation_", "comparison_"),
-        title=spec["title"].replace("sweep", "main comparison"),
     )
     for spec in FACTOR_SPECS
 )

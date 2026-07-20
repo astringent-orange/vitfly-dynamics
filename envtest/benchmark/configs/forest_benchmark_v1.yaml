@@ -1,5 +1,11 @@
 experiment_id: forest_benchmark_v1
 
+execution:
+  # Benchmark runs use simulated time at 1.5x wall-clock speed and reuse one
+  # simulator session for cases sharing the same scene_id.
+  real_time_factor: 1.5
+  reuse_simulator: true
+
 source_level: trees
 output_level: forest_benchmark_v1
 scene_seed: 20260716
@@ -45,16 +51,35 @@ scenario:
     validation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     test: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
   phase_seeds:
-    validation: [8000, 8001]
-    test: [9000, 9001]
-  desired_speeds: [3.0, 5.0, 7.0]
-  density_counts:
-    low: 50
-    medium: 100
-    high: 150
+    validation: [8000, 8001, 8002, 8003, 8004]
+    test: [9000, 9001, 9002, 9003, 9004]
+  desired_speeds: [2.0, 4.0, 5.0, 6.0, 8.0]
+  forest_density:
+    trees_per_100m2: 6.0
+    roi_tree_count: 70
   dynamic:
-    count: 8
-    medium_period_seconds: [6.0, 10.0]
+    # Six longitudinal interaction stations, each with low/middle/high
+    # obstacles. Geometry is shared across speed profiles; timestamps are
+    # re-scaled to the requested nominal 3-D speed.
+    stations: 6
+    station_x: [10.0, 19.0, 28.0, 37.0, 46.0, 55.0]
+    objects_per_station: 3
+    count: 18
+    reference_speed_mps: 2.0
+    period_jitter_range: [0.85, 1.15]
+    scale_range: [0.6, 1.2]
+    z_bounds: [0.0, 10.0]
+    boundary_margin: 0.2
+    height_bands:
+      low:
+        center_range: [2.0, 2.4]
+        amplitude_range: [0.8, 1.2]
+      medium:
+        center_range: [4.4, 5.0]
+        amplitude_range: [1.2, 1.8]
+      high:
+        center_range: [7.2, 7.6]
+        amplitude_range: [1.0, 1.4]
     profiles:
       dynamic_speed_1mps:
         nominal_speed_mps: 1.0
@@ -65,6 +90,9 @@ scenario:
       dynamic_speed_3mps:
         nominal_speed_mps: 3.0
         speed_multiplier: 1.5
+      dynamic_speed_4mps:
+        nominal_speed_mps: 4.0
+        speed_multiplier: 2.0
   forest_roi: [2.0, 60.0, -10.0, 10.0]
   min_tree_spacing: 1.0
   endpoint_clearance: 3.0
@@ -77,6 +105,8 @@ evaluation_profiles:
     goal_x: 60.0
     timeout_seconds: 60.0
     collision_margin: 0.0
+    dynamic_encounter_margin: 2.0
+    terminate_on_collision: true
     bounding_box: [-5.0, 65.0, -10.0, 10.0, 0.0, 10.0]
     plots: false
 
@@ -95,42 +125,39 @@ design:
       result_id: egoplanner
       source_policy: egoplanner
   conditions:
-    baseline:
-      desired_speed: 5.0
-      density: medium
-      dynamic_profile: dynamic_speed_2mps
     dynamic_speed_1mps:
       desired_speed: 5.0
-      density: medium
       dynamic_profile: dynamic_speed_1mps
+    dynamic_speed_2mps:
+      desired_speed: 5.0
+      dynamic_profile: dynamic_speed_2mps
     dynamic_speed_3mps:
       desired_speed: 5.0
-      density: medium
       dynamic_profile: dynamic_speed_3mps
-    forest_density_low:
+    dynamic_speed_4mps:
       desired_speed: 5.0
-      density: low
+      dynamic_profile: dynamic_speed_4mps
+    flight_speed_2:
+      desired_speed: 2.0
       dynamic_profile: dynamic_speed_2mps
-    forest_density_high:
-      desired_speed: 5.0
-      density: high
+    flight_speed_4:
+      desired_speed: 4.0
       dynamic_profile: dynamic_speed_2mps
-    flight_speed_3:
-      desired_speed: 3.0
-      density: medium
+    flight_speed_6:
+      desired_speed: 6.0
       dynamic_profile: dynamic_speed_2mps
-    flight_speed_7:
-      desired_speed: 7.0
-      density: medium
+    flight_speed_8:
+      desired_speed: 8.0
       dynamic_profile: dynamic_speed_2mps
   single_factor_scenarios:
-    - baseline
     - dynamic_speed_1mps
+    - dynamic_speed_2mps
     - dynamic_speed_3mps
-    - forest_density_low
-    - forest_density_high
-    - flight_speed_3
-    - flight_speed_7
+    - dynamic_speed_4mps
+    - flight_speed_2
+    - flight_speed_4
+    - flight_speed_6
+    - flight_speed_8
   ablation_validation:
     split: validation
     scenario_set: single_factor_scenarios

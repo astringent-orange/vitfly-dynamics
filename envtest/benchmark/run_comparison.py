@@ -64,6 +64,10 @@ def build_parser():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--runner-timeout", type=float, default=420.0)
     parser.add_argument("--simulator-retries", type=int, default=1)
+    parser.add_argument("--real-time-factor", type=float)
+    parser.add_argument("--reuse-simulator", dest="reuse_simulator", action="store_true")
+    parser.add_argument("--no-reuse-simulator", dest="reuse_simulator", action="store_false")
+    parser.set_defaults(reuse_simulator=None)
     return parser
 
 
@@ -88,6 +92,12 @@ def main(argv=None):
         "--runner-timeout", str(args.runner_timeout),
         "--simulator-retries", str(args.simulator_retries),
     ]
+    if args.real_time_factor is not None:
+        benchmark_args.extend(("--real-time-factor", str(args.real_time_factor)))
+    if args.reuse_simulator is True:
+        benchmark_args.append("--reuse-simulator")
+    elif args.reuse_simulator is False:
+        benchmark_args.append("--no-reuse-simulator")
     for scenario in args.scenario:
         benchmark_args.extend(("--scenario", scenario))
     for case_id in args.case_id:

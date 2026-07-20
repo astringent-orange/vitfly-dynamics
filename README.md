@@ -156,7 +156,7 @@ original_vitfly -> models/ViTLSTM_model.pth
 
 ```bash
 VITFLY_ENV_LEVEL=forest_benchmark_v1 \
-VITFLY_ENV_FOLDER=map_010_density_medium_dynamic_speed_2mps \
+VITFLY_ENV_FOLDER=map_010_density_6_dynamic_speed_2mps \
 bash launch_evaluation.bash 1 vision fixed_env offset=0
 ```
 
@@ -168,31 +168,36 @@ bash launch_evaluation.bash 1 vision fixed_env offset=0
 
 | 扫描因素 | 取值 | 固定条件 |
 |---|---|---|
-| 动态障碍速度 | 1 / 2 / 3m/s | 无人机5m/s、100棵树 |
-| 森林密度 | 50 / 100 / 150棵 | 无人机5m/s、动态障碍2m/s |
-| 无人机速度 | 3 / 5 / 7m/s | 100棵树、动态障碍2m/s |
+| 动态障碍速度 | 1 / 2 / 3 / 4m/s | 无人机5m/s、森林密度6棵/100平方米 |
+| 无人机速度 | 2 / 4 / 6 / 8m/s | 森林密度6棵/100平方米、动态障碍2m/s |
 
-共同基准为“无人机5m/s、100棵树、动态障碍2m/s”。它只运行一次，并在三组扫描中复用，因此实际使用7个不重复条件：
+动态速度扫描固定无人机5m/s，飞行速度扫描固定动态障碍2m/s，因此实际使用8个条件：
+
+每个生成场景包含6个纵向交互站点，每个站点分别放置低、中、高三个动态障碍，共18个障碍物。
+三个高度层覆盖约0.8–9.0m，并使用垂直正弦运动；不同速度profile共享完全相同的空间轨迹，只缩放轨迹时间。
 
 ```text
-baseline
 dynamic_speed_1mps
+dynamic_speed_2mps
 dynamic_speed_3mps
-forest_density_low
-forest_density_high
-flight_speed_3
-flight_speed_7
+dynamic_speed_4mps
+flight_speed_2
+flight_speed_4
+flight_speed_6
+flight_speed_8
 ```
 
 每个模型运行：
 
 ```text
-7个条件 × 10张地图 × 2个phase seed = 140轮
+8个条件 × 10张地图 × 5个phase seed = 400轮
 ```
 
-下面每条模型命令默认都会完成全部140轮。每个case都会启动全新的ROS/Flightmare仿真器，并在结束后确认相关进程和topic已经消失，再进入下一个case。仿真器启动、必需topic或结果文件发生基础设施故障时，程序默认完整清理并自动重试一次；第二次仍失败则保存诊断并停止整批，避免将环境故障计入模型性能。
+下面每条模型命令默认都会完成全部400轮。配置文件中的Benchmark仿真速度为 `1.5×`，即只缩短墙钟时间，不改变仿真中的无人机或障碍物物理速度；可用 `--real-time-factor 1.0` 临时恢复原速。默认按 `scene_id` 复用ROS/Flightmare仿真器：相同地图、森林密度和动态障碍速度的case共用一个仿真会话，每个case仍会重新启动evaluator/controller并重置无人机和动态障碍phase。仿真器启动、必需topic或结果文件发生基础设施故障时，程序默认完整清理并自动重试一次；第二次仍失败则保存诊断并停止整批，避免将环境故障计入模型性能。
 
-三个模型合计 **420轮**。汇总指标包括：
+同一个 `scene_id` 的多个phase或设定飞行速度会共用一个仿真器；不同地图或动态障碍速度会启动新的仿真会话。复用模式下Runner负责整组仿真器的启动、重启和清理，不能与已经手动启动的ROS/Flightmare实例混用。需要进行隔离模式对照或排查状态残留时，使用 `--no-reuse-simulator` 强制每个case完整重启。
+
+三个模型合计 **1200轮**。汇总指标包括：
 
 - 成功率：到达终点且全程零碰撞的rollout比例。
 - 碰撞率：至少发生一次碰撞的rollout比例。
@@ -221,6 +226,14 @@ python3 envtest/benchmark/run_benchmark.py \
   --policy skip_one
 ```
 
+需要临时关闭默认的同场景复用时：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --policy single \
+  --no-reuse-simulator
+```
+
 `--config` 默认使用 `envtest/benchmark/configs/forest_benchmark_v1.yaml`，`--cases` 默认使用 `envtest/benchmark/manifests/ablation_validation_cases.csv`，需要测试其他配置或manifest时仍可显式覆盖。消融实验一次只允许一个 `--policy`。未指定 `--output` 时，结果自动写入带当前时间的目录，例如：
 
 ```text
@@ -229,7 +242,7 @@ results/ablation/adjacent_20260717_173510/
 results/ablation/skip_one_20260717_195845/
 ```
 
-三个模型全部完成后直接运行：
+三个模型全部完成400轮后直接运行：
 
 ```bash
 python3 envtest/benchmark/summarize_results.py
@@ -237,15 +250,14 @@ python3 envtest/benchmark/summarize_results.py
 
 汇总脚本自动选择三个模型各自最新修改的 `results.csv`。汇总表格和图像固定写入 `results/ablation/table/`，再次运行会覆盖上一次的汇总结果。需要汇总指定批次时，仍可显式传入多个 `--results` 和一个 `--output`。
 
-汇总后生成三张图：
+汇总后生成两张图：
 
 ```text
 ablation_dynamic_speed.png
-ablation_forest_density.png
 ablation_flight_speed.png
 ```
 
-每张图的横轴是对应因素的三个取值，三条曲线对应 `single`、`adjacent` 和 `skip_one`。图中从上到下依次为带95% bootstrap CI的成功率、碰撞率和成功rollout的中位飞行时间；没有成功rollout时，飞行时间点留空。
+每张图的横轴是对应因素的四个取值，三条曲线对应 `single`、`adjacent` 和 `skip_one`。图中从上到下依次为带95% bootstrap CI的成功率、碰撞率和成功rollout的中位飞行时间；没有成功rollout时，飞行时间点留空。
 
 主要参数：
 
@@ -255,8 +267,27 @@ ablation_flight_speed.png
 - `--output`：可选。消融实验默认使用 `results/ablation/<policy>_YYYYMMDD_HHMMSS/`；主对比实验仍需显式指定。
 - `--resume`：跳过结果目录中已经完成的 `(policy_id, case_id)`；恢复中断实验时需同时传入原来的 `--output`。
 - `--simulator-retries`：基础设施故障后的自动重试次数，默认为 `1`。
+- `--real-time-factor`：覆盖配置中的仿真墙钟速度倍率，默认为 `1.5`。
+- `--reuse-simulator`：按 `scene_id` 复用仿真器会话；当前配置默认开启。
+- `--no-reuse-simulator`：临时关闭复用，强制每个case独立启动仿真器。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 - `--case-id <id>`：可选，只运行manifest中的指定case；可重复传入，用于精确复测并替换异常结果。
+
+Benchmark 的每个 case 会在启动日志中记录阶段标记，并把墙钟耗时写入 `results.csv`：
+`case_wall_seconds`（整轮）、`simulator_ready_seconds`（仿真器就绪）、
+`pilot_prepare_seconds`（飞控初始化至悬停）、`controller_startup_seconds`（控制器启动至导航开始）、
+`rollout_wall_seconds`（导航开始至评价完成）和 `cleanup_seconds`（结束清理）。共享仿真器会话的首次 case
+另记录 `simulator_session_startup_seconds`。缺失阶段标记留空，不用零值伪造耗时；每次尝试的原始日志位于
+`rollout_logs/<policy>__<case_id>__attempt_<n>.log`。
+
+结果中还记录动态交互诊断：无人机高度范围、动态障碍最小距离、动态交互次数、交互持续时间和动态碰撞标记。
+汇总表会额外给出动态交互率，帮助确认成功率变化确实来自动态障碍交互，而不是从高度边界绕行。
+
+Benchmark 初始化中的 `off`、`reset_sim` 和 `enable` 不再依赖固定等待，而是等待飞控遥测/状态确认：
+分别确认桥接已关闭、状态已复位、桥接已启用。确认超时按仿真器基础设施错误处理，并遵循
+`--simulator-retries` 重试策略；复用仿真器时还会校验 `reset_benchmark` 服务返回的 `success` 字段。
+普通手动测试仍保留原有的固定等待和 `rostopic pub --once` 行为。Benchmark 默认关闭控制器逐帧推理计时日志，
+不会影响模型推理或最终统计；非 Benchmark 可设置 `VITFLY_INFERENCE_TIMING_LOGS=true` 保留该日志。
 
 按 `Ctrl+C` 中断时，当前case不会写入结果；脚本会先清理其进程。之后使用原输出目录继续，例如：
 
@@ -267,15 +298,15 @@ python3 envtest/benchmark/run_benchmark.py \
   --resume
 ```
 
-`--resume`也会自动重跑并替换已有的 `simulator_error`、`runner_timeout` 或 `missing_result` 行，不会产生重复case。汇总只接受每个模型完整覆盖manifest中140个唯一case、且不存在基础设施故障或未知退出码的结果；退出码为2的 `controller_error` 是模型失败，允许进入统计。汇总脚本不自动排序或选择模型，需结合 `summary.csv`、`paired_model_differences.csv` 和三张图人工决定用于主对比实验的模型。
+`--resume`也会自动重跑并替换已有的 `simulator_error`、`runner_timeout` 或 `missing_result` 行，不会产生重复case。汇总只接受每个模型完整覆盖manifest中400个唯一case、且不存在基础设施故障或未知退出码的结果；退出码为2的 `controller_error` 是模型失败，允许进入统计。汇总脚本不自动排序或选择模型，需结合 `summary.csv`、`paired_model_differences.csv` 和两张图人工决定用于主对比实验的模型。
 
 ### Comparison experiment
 
-该实验在未参与消融的 test maps 上比较人工选出的最优模型、官方ViTFly、FastPlanner和EGO-Planner。仍采用动态障碍速度、森林密度和无人机速度三个单因素扫描，共用同一个baseline：
+该实验在未参与消融的 test maps 上比较人工选出的最优模型、官方ViTFly、FastPlanner和EGO-Planner。采用动态障碍速度和无人机速度两个单因素扫描，森林密度固定为6棵/100平方米：
 
 ```text
-7个不重复条件 × 10张test地图 × 2个phase seed = 140轮/模型
-4个模型 × 140轮 = 560轮
+8个条件 × 10张test地图 × 5个phase seed = 400轮/模型
+4个模型 × 400轮 = 1600轮
 ```
 
 每次命令只测试一个模型。主对比默认使用森林Benchmark配置和 `comparison_test_cases.csv`，结果自动写入 `results/comparison/<model>_YYYYMMDD_HHMMSS/`。
@@ -319,14 +350,13 @@ python3 envtest/benchmark/run_comparison.py \
 python3 envtest/benchmark/summarize_comparison.py
 ```
 
-主对比实验同样会为每个case完整重启仿真器、默认重试一次基础设施故障，并支持 `--simulator-retries`。汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组140个cases且没有基础设施错误；发现中断、不配对或环境故障结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparison/table/`：
+主对比实验默认也按scene复用仿真器；使用 `--no-reuse-simulator` 可切换为每个case完整重启。两种模式都默认重试一次基础设施故障，并支持 `--simulator-retries`。汇总脚本自动选择四个模型各自最新修改的 `results.csv`，并检查每个模型是否完整包含同一组400个cases且没有基础设施错误；发现中断、不配对或环境故障结果时会要求先恢复实验。验证通过后覆盖写入 `results/comparison/table/`：
 
 ```text
 summary.csv
 summary.json
 paired_model_differences.csv
 comparison_dynamic_speed.png
-comparison_forest_density.png
 comparison_flight_speed.png
 ```
 
@@ -363,7 +393,7 @@ velocity: [vx, vy, vz]
 3. 在bridge中将规划器轨迹或控制量转换为上述world-frame LINVEL命令。
 4. 在 `forest_benchmark_v1.yaml` 中填写 `launch_command`、`ready_topic`，并将 `enabled` 改为 `true`。
 5. 在 `policy_adapters.py` 中实现对应规划器的启动、ready等待、进程监控和停止逻辑。
-6. 先验证进程退出会记录为 `controller_error`，再完成单case测试，最后运行140轮正式测试。
+6. 先验证进程退出会记录为 `controller_error`，再完成单case测试，最后运行400轮正式测试。
 
 所有规划器使用同一独立evaluator，指标仍为成功率、碰撞率、成功飞行时间、95%成功率CI、paired model difference和结构化失败原因。规划器内部报告的“成功”不能替代Benchmark evaluator的判定。
 

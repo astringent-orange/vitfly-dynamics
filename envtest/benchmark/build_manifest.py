@@ -19,7 +19,7 @@ CASE_FIELDS = [
 ]
 SCENE_FIELDS = [
     "scene_id", "map_id", "forest_density", "tree_count", "dynamic_profile",
-    "dynamic_speed_mps", "scene_path", "scene_hash",
+    "dynamic_speed_mps", "roi_tree_count", "scene_path", "scene_hash",
 ]
 
 
@@ -51,7 +51,7 @@ def hash_scene(path):
 
 
 def scene_path(cfg, map_id, density, profile):
-    scene_id = f"map_{map_id:03d}_density_{density}_{profile}"
+    scene_id = f"map_{map_id:03d}_{density}_{profile}"
     path = VISION_ROOT / cfg.get("output_level", "forest_benchmark_v1") / scene_id
     if not path.is_dir():
         raise FileNotFoundError(f"missing generated scene: {path}")
@@ -60,7 +60,8 @@ def scene_path(cfg, map_id, density, profile):
             raise FileNotFoundError(f"scene {scene_id} missing {required}")
     metadata_path = path / "scene_metadata.yaml"
     metadata = load(metadata_path) if metadata_path.is_file() else {}
-    return scene_id, path, int(metadata.get("tree_count", 0)), hash_scene(path)
+    return (scene_id, path, int(metadata.get("tree_count", 0)),
+            int(metadata.get("roi_tree_count", 0)), hash_scene(path))
 
 
 def write_csv(path, fields, rows):
@@ -77,24 +78,27 @@ def build(cfg):
     scene_rows = []
     scene_lookup = {}
     all_maps = sorted(set(scenario["map_ids"]["validation"] + scenario["map_ids"]["test"]))
+    density = "density_6"
+    density_value = float(scenario["forest_density"]["trees_per_100m2"])
+    expected_roi_count = int(scenario["forest_density"]["roi_tree_count"])
     for map_id in all_maps:
-        for density, tree_count in scenario["density_counts"].items():
-            for profile, profile_cfg in profiles.items():
-                scene_id, path, actual_count, digest = scene_path(cfg, map_id, density, profile)
-                if actual_count and actual_count != int(tree_count):
-                    raise ValueError(f"{scene_id} has {actual_count} trees, expected {tree_count}")
-                relative = path.relative_to(VISION_ROOT).as_posix()
-                scene_rows.append({
-                    "scene_id": scene_id,
-                    "map_id": map_id,
-                    "forest_density": density,
-                    "tree_count": actual_count or tree_count,
-                    "dynamic_profile": profile,
-                    "dynamic_speed_mps": profile_cfg["nominal_speed_mps"],
-                    "scene_path": relative,
-                    "scene_hash": digest,
-                })
-                scene_lookup[(map_id, density, profile)] = (scene_id, relative, digest, actual_count or tree_count)
+        for profile, profile_cfg in profiles.items():
+            scene_id, path, actual_count, roi_count, digest = scene_path(cfg, map_id, density, profile)
+            if roi_count != expected_roi_count:
+                raise ValueError(f"{scene_id} has {roi_count} corridor trees, expected {expected_roi_count}")
+            relative = path.relative_to(VISION_ROOT).as_posix()
+            scene_rows.append({
+                "scene_id": scene_id,
+                "map_id": map_id,
+                "forest_density": str(density_value),
+                "tree_count": actual_count,
+                "dynamic_profile": profile,
+                "dynamic_speed_mps": profile_cfg["nominal_speed_mps"],
+                "roi_tree_count": roi_count,
+                "scene_path": relative,
+                "scene_hash": digest,
+            })
+            scene_lookup[(map_id, density, profile)] = (scene_id, relative, digest, actual_count)
 
     def cases_for(split, maps, phases, entries):
         rows = []
@@ -111,7 +115,7 @@ def build(cfg):
                         "map_id": map_id,
                         "phase_seed": phase_seed,
                         "desired_speed": speed,
-                        "forest_density": density,
+                        "forest_density": str(density_value),
                         "tree_count": tree_count,
                         "dynamic_profile": profile,
                         "dynamic_speed_mps": profiles[profile]["nominal_speed_mps"],
@@ -136,10 +140,8 @@ def build(cfg):
             if scenario_id not in conditions:
                 raise ValueError(f"undefined benchmark condition: {scenario_id}")
             condition = conditions[scenario_id]
-            density = condition["density"]
+            density = "density_6"
             profile = condition["dynamic_profile"]
-            if density not in scenario["density_counts"]:
-                raise ValueError(f"unknown density for {scenario_id}: {density}")
             if profile not in profiles:
                 raise ValueError(f"unknown dynamic profile for {scenario_id}: {profile}")
             entries.append((scenario_id, float(condition["desired_speed"]), density, profile))

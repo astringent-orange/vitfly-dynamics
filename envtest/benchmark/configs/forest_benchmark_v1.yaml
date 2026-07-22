@@ -53,7 +53,7 @@ scenario:
   phase_seeds:
     validation: [8000, 8001, 8002, 8003, 8004]
     test: [9000, 9001, 9002, 9003, 9004]
-  desired_speeds: [2.0, 4.0, 5.0, 6.0, 8.0]
+  desired_speeds: [2.0, 4.0, 5.0, 6.0, 8.0, 10.0]
   forest_density:
     trees_per_100m2: 6.0
     roi_tree_count: 70
@@ -93,6 +93,9 @@ scenario:
       dynamic_speed_4mps:
         nominal_speed_mps: 4.0
         speed_multiplier: 2.0
+      dynamic_speed_5mps:
+        nominal_speed_mps: 5.0
+        speed_multiplier: 2.5
   forest_roi: [2.0, 60.0, -10.0, 10.0]
   min_tree_spacing: 1.0
   endpoint_clearance: 3.0
@@ -137,6 +140,9 @@ design:
     dynamic_speed_4mps:
       desired_speed: 5.0
       dynamic_profile: dynamic_speed_4mps
+    dynamic_speed_5mps:
+      desired_speed: 5.0
+      dynamic_profile: dynamic_speed_5mps
     flight_speed_2:
       desired_speed: 2.0
       dynamic_profile: dynamic_speed_2mps
@@ -149,7 +155,21 @@ design:
     flight_speed_8:
       desired_speed: 8.0
       dynamic_profile: dynamic_speed_2mps
-  single_factor_scenarios:
+    flight_speed_10:
+      desired_speed: 10.0
+      dynamic_profile: dynamic_speed_2mps
+  ablation_scenarios:
+    - dynamic_speed_1mps
+    - dynamic_speed_2mps
+    - dynamic_speed_3mps
+    - dynamic_speed_4mps
+    - dynamic_speed_5mps
+    - flight_speed_2
+    - flight_speed_4
+    - flight_speed_6
+    - flight_speed_8
+    - flight_speed_10
+  comparison_scenarios:
     - dynamic_speed_1mps
     - dynamic_speed_2mps
     - dynamic_speed_3mps
@@ -160,7 +180,7 @@ design:
     - flight_speed_8
   ablation_validation:
     split: validation
-    scenario_set: single_factor_scenarios
+    scenario_set: ablation_scenarios
   comparison_test:
     split: test
-    scenario_set: single_factor_scenarios
+    scenario_set: comparison_scenarios

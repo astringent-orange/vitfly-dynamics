@@ -731,7 +731,7 @@ do
     echo
     if ! publish_empty_control /kingfisher/start_navigation 2 30
     then
-      if ! ps -p $COMP_PID > /dev/null
+      if ! ps -p "$COMP_PID" > /dev/null
       then
         echo "[LAUNCH_EVALUATION] Controller exited before navigation could start."
         batch_failed=1
@@ -761,18 +761,29 @@ do
       write_rollout_failure_summary simulator_error
       break
     fi
-    if ! ps -p $COMP_PID > /dev/null
+    if ! ps -p "$COMP_PID" > /dev/null
     then
-      echo "[LAUNCH_EVALUATION] Controller exited; waiting for evaluator result."
-      if wait_for_evaluator_result 5
+      controller_returncode=0
+      wait "$COMP_PID" 2>/dev/null || controller_returncode=$?
+      COMP_PID=""
+      echo "[LAUNCH_EVALUATION] Controller exited with code $controller_returncode; waiting for evaluator result."
+      if [ "$controller_returncode" -eq 0 ] && wait_for_evaluator_result 5
       then
         echo "[LAUNCH_EVALUATION] Evaluator result is complete; treating controller exit as normal shutdown."
         break
       fi
-      echo "[LAUNCH_EVALUATION] Controller exited before evaluator completed."
-      batch_failed=1
-      stop_evaluator
-      write_rollout_failure_summary controller_error
+      if [ "$controller_returncode" -eq 3 ]
+      then
+        echo "[LAUNCH_EVALUATION] Controller reported an input-pipeline failure."
+        batch_infrastructure_failed=1
+        stop_evaluator
+        write_rollout_failure_summary input_pipeline_error
+      else
+        echo "[LAUNCH_EVALUATION] Controller exited before evaluator completed."
+        batch_failed=1
+        stop_evaluator
+        write_rollout_failure_summary controller_error
+      fi
       break
     fi
     if [ "$benchmark_mode" = "1" ]

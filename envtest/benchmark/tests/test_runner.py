@@ -1,7 +1,8 @@
+import csv
 import io
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,9 @@ from envtest.benchmark.run_benchmark import (
     build_parser,
     empty_result,
     load,
+    controller_diagnostics,
+    forced_result_keys,
+    quarantine_forced_rows,
     result_needs_rerun,
     resolve_output_path,
     run_one,
@@ -66,6 +70,14 @@ class RunnerTest(unittest.TestCase):
         ])
         self.assertEqual(args.case_id, ["c1", "c2"])
 
+    def test_forced_recovery_filters_are_repeatable(self):
+        args = build_parser().parse_args([
+            "--policy", "single", "--resume",
+            "--rerun-map", "4", "--rerun-case", "c1", "--rerun-case", "c2",
+        ])
+        self.assertEqual(args.rerun_map, ["4"])
+        self.assertEqual(args.rerun_case, ["c1", "c2"])
+
     def test_ablation_uses_policy_and_timestamp_as_default_output(self):
         output, used_default = resolve_output_path(
             "envtest/benchmark/manifests/ablation_validation_cases.csv",
@@ -95,6 +107,17 @@ class RunnerTest(unittest.TestCase):
     def test_simulator_failure_is_retried_once(self, mocked_attempt):
         mocked_attempt.side_effect = [
             empty_result("simulator_error", 3),
+            {**empty_result("goal_reached", 0), "success": 1},
+        ]
+        result = run_one({}, {"id": "single"}, {"case_id": "c1"}, Path("out"))
+        self.assertEqual(mocked_attempt.call_count, 2)
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertEqual(result["success"], 1)
+
+    @patch("envtest.benchmark.run_benchmark.run_attempt")
+    def test_input_pipeline_failure_is_retried_once(self, mocked_attempt):
+        mocked_attempt.side_effect = [
+            empty_result("input_pipeline_error", 3),
             {**empty_result("goal_reached", 0), "success": 1},
         ]
         result = run_one({}, {"id": "single"}, {"case_id": "c1"}, Path("out"))
@@ -138,6 +161,42 @@ class RunnerTest(unittest.TestCase):
             next(row for row in rows if row["case_id"] == "c1")["termination_reason"],
             "goal_reached",
         )
+
+    def test_input_pipeline_failure_is_resume_retryable(self):
+        self.assertTrue(result_needs_rerun({
+            "termination_reason": "input_pipeline_error", "runner_returncode": "3",
+        }))
+
+    def test_controller_diagnostics_are_read_from_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "controller.json"
+            path.write_text(
+                '{"depth_frames_received": 10, "depth_frames_usable": 9, '
+                '"command_publish_count": 4, "controller_failure_detail": ""}'
+            )
+            result = controller_diagnostics(path)
+        self.assertEqual(result["depth_frames_received"], 10)
+        self.assertEqual(result["depth_frames_usable"], 9)
+        self.assertEqual(result["command_publish_count"], 4)
+
+    def test_forced_rows_are_quarantined_without_duplicates(self):
+        policies = [{"id": "single"}]
+        cases = [{"case_id": "c1", "map_id": "4"}, {"case_id": "c2", "map_id": "5"}]
+        forced = forced_result_keys(policies, cases, map_ids=["4"])
+        rows = [
+            {"policy_id": "single", "case_id": "c1", "termination_reason": "timeout"},
+            {"policy_id": "single", "case_id": "c2", "termination_reason": "goal_reached"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            result_path = Path(directory) / "results.csv"
+            remaining, quarantine, count = quarantine_forced_rows(
+                result_path, rows, forced, now=datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc)
+            )
+            self.assertEqual(count, 1)
+            self.assertEqual([row["case_id"] for row in remaining], ["c2"])
+            self.assertTrue(quarantine.is_file())
+            with result_path.open() as stream:
+                self.assertEqual(len(list(csv.DictReader(stream))), 1)
 
     @patch("envtest.benchmark.run_benchmark.terminate_process_group")
     @patch("envtest.benchmark.run_benchmark.subprocess.Popen")

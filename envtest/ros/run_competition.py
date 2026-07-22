@@ -96,6 +96,29 @@ def resolve_model_path(offset, model_path=None):
     return DEFAULT_MODEL_PATHS[offset]
 
 
+def prepare_depth_frame(image, threshold=0.09):
+    """Normalize one depth frame while preserving valid sparse zero pixels.
+
+    Unity can use zero for individual far/background pixels.  The original
+    controller still inferred on such a frame; only an entirely empty or
+    malformed frame is unusable.
+    """
+    image = np.asarray(image)
+    if (
+        image.ndim != 2
+        or image.size == 0
+        or np.isnan(image).any()
+        or np.isneginf(image).any()
+    ):
+        return None, "invalid"
+    normalized = np.clip(image / threshold, 0, 1)
+    if not np.any(normalized > 0.0):
+        return None, "all_zero"
+    if np.any(normalized <= 0.0):
+        return normalized, "partial_zero"
+    return normalized, "valid"
+
+
 class AgilePilotNode:
     def __init__(self, vision_based=False, offset=0, model_path=None, desVel=None, keyboard=False):
         print("[RUN_COMPETITION] Initializing agile_pilot_node...")
@@ -110,6 +133,19 @@ class AgilePilotNode:
         self.dynamic_obstacles = None
         self.is_shutting_down = False
         self.finished = False
+        self.exit_code = 0
+        self.controller_failure_detail = ""
+        self.depth_frames_received = 0
+        self.depth_frames_usable = 0
+        self.depth_invalid_frames = 0
+        self.depth_all_zero_frames = 0
+        self.depth_partial_zero_frames = 0
+        self.command_publish_count = 0
+        self.first_command_wall_seconds = None
+        self.navigation_started_monotonic = None
+        self.watchdog_stop = threading.Event()
+        self.watchdog_thread = None
+        self.controller_diagnostics_path = os.environ.get("VITFLY_CONTROLLER_DIAGNOSTICS_PATH", "")
 
         quad_name = "kingfisher"
 
@@ -202,7 +238,9 @@ class AgilePilotNode:
             self.model = globals()[self.model_type]().to(self.device).float()
 
             # Give full path if possible since the bash script runs from outside the folder
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model.load_state_dict(
+                torch.load(model_path, map_location=self.device, weights_only=True)
+            )
             metadata_path = opj(os.path.dirname(os.path.abspath(model_path)), 'run_metadata.json')
             allow_legacy = os.environ.get("VITFLY_ALLOW_LEGACY_CHECKPOINT", "0") == "1"
             if not os.path.isfile(metadata_path) and not allow_legacy:
@@ -416,7 +454,71 @@ class AgilePilotNode:
     def shutdown_callback(self):
         self.is_shutting_down = True
         self.publish_commands = False
+        self.watchdog_stop.set()
+        self.write_controller_diagnostics()
         self.flush_data_log()
+
+    def controller_diagnostics(self):
+        return {
+            "depth_frames_received": int(self.depth_frames_received),
+            "depth_frames_usable": int(self.depth_frames_usable),
+            "depth_invalid_frames": int(self.depth_invalid_frames),
+            "depth_all_zero_frames": int(self.depth_all_zero_frames),
+            "depth_partial_zero_frames": int(self.depth_partial_zero_frames),
+            "command_publish_count": int(self.command_publish_count),
+            "first_command_wall_seconds": self.first_command_wall_seconds,
+            "controller_failure_detail": self.controller_failure_detail,
+            "exit_code": int(self.exit_code),
+        }
+
+    def write_controller_diagnostics(self):
+        if not self.controller_diagnostics_path:
+            return
+        try:
+            parent = os.path.dirname(os.path.abspath(self.controller_diagnostics_path))
+            os.makedirs(parent, exist_ok=True)
+            tmp_path = self.controller_diagnostics_path + ".tmp"
+            with open(tmp_path, "w") as stream:
+                json.dump(self.controller_diagnostics(), stream, sort_keys=True)
+                stream.write("\n")
+            os.replace(tmp_path, self.controller_diagnostics_path)
+        except Exception as exc:
+            print(f"[RUN_COMPETITION] Failed to write controller diagnostics: {exc}")
+
+    def _watchdog_loop(self):
+        timeout = float(os.environ.get("VITFLY_NO_COMMAND_TIMEOUT_SECONDS", "5"))
+        while not self.watchdog_stop.wait(0.2):
+            if (
+                not self.benchmark_mode
+                or self.finished
+                or not self.publish_commands
+                or self.navigation_started_monotonic is None
+                or self.command_publish_count > 0
+            ):
+                continue
+            if time.monotonic() - self.navigation_started_monotonic < timeout:
+                continue
+            if self.depth_frames_usable == 0:
+                self.controller_failure_detail = "no_usable_depth"
+                self.exit_code = 3
+                reason = "No usable depth frame after navigation"
+            else:
+                self.controller_failure_detail = "no_command"
+                self.exit_code = 2
+                reason = "No velocity command after navigation"
+            print(
+                f"[RUN_COMPETITION] {reason}; received={self.depth_frames_received} "
+                f"usable={self.depth_frames_usable} invalid={self.depth_invalid_frames}"
+            )
+            self.finish_run(reason)
+            return
+
+    def start_watchdog(self):
+        if self.watchdog_thread is None and self.benchmark_mode:
+            self.watchdog_thread = threading.Thread(
+                target=self._watchdog_loop, name="benchmark_command_watchdog", daemon=True
+            )
+            self.watchdog_thread.start()
 
     def reached_goal(self, state=None):
         state = state if state is not None else self.state
@@ -442,9 +544,11 @@ class AgilePilotNode:
         if self.finished:
             return
         self.finished = True
+        self.watchdog_stop.set()
         print(f"[RUN_COMPETITION] Finishing run: {reason}")
         self.publish_zero_velocity()
         self.publish_commands = False
+        self.write_controller_diagnostics()
         self.flush_data_log()
         rospy.signal_shutdown(reason)
 
@@ -520,10 +624,19 @@ class AgilePilotNode:
         if rospy.is_shutdown() or self.is_shutting_down or self.finished:
             return
         self.ctr += 1
-        img = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding="passthrough")
-        img = np.clip(img/self.depth_im_threshold, 0, 1)
-        if img.min() <= 0.0:
+        self.depth_frames_received += 1
+        raw_img = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding="passthrough")
+        img, depth_status = prepare_depth_frame(raw_img, self.depth_im_threshold)
+        if img is None and depth_status == "invalid":
+            self.depth_invalid_frames += 1
             return
+        if depth_status == "all_zero":
+            self.depth_invalid_frames += 1
+            self.depth_all_zero_frames += 1
+            return
+        self.depth_frames_usable += 1
+        if depth_status == "partial_zero":
+            self.depth_partial_zero_frames += 1
         if self.last_valid_img is not None:
             self.frame_history.append(deepcopy(self.last_valid_img))
         self.last_valid_img = deepcopy(img)
@@ -546,10 +659,17 @@ class AgilePilotNode:
         # print('[RUN_COMPETITION] calling compute_command_vision_based')
         start_compute_time = time.time() if self.inference_timing_logs else None
 
-        command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(
-            state_snapshot, img, self.frame_history, self.desiredVel, self.model,
-            self.model_hidden_state, self.frame_offset,
-        )
+        try:
+            command, (debug_img1, debug_img2), self.model_hidden_state = compute_command_vision_based(
+                state_snapshot, img, self.frame_history, self.desiredVel, self.model,
+                self.model_hidden_state, self.frame_offset,
+            )
+        except Exception as exc:
+            self.controller_failure_detail = f"inference_error:{type(exc).__name__}"
+            self.exit_code = 2
+            print(f"[RUN_COMPETITION] Inference failed: {exc}")
+            self.finish_run("Controller inference error")
+            return
         if command is None:
             return
 
@@ -688,6 +808,7 @@ class AgilePilotNode:
                     self.cmd_pub.publish(cmd_msg)
                 except rospy.exceptions.ROSException:
                     return False
+                self.record_command_published()
                 return True
         elif command.mode == AgileCommandMode.CTBR:
             assert len(command.bodyrates) == 3
@@ -704,6 +825,7 @@ class AgilePilotNode:
                     self.cmd_pub.publish(cmd_msg)
                 except rospy.exceptions.ROSException:
                     return False
+                self.record_command_published()
                 return True
         elif command.mode == AgileCommandMode.LINVEL:
             vel_msg = TwistStamped()
@@ -719,6 +841,7 @@ class AgilePilotNode:
                     self.linvel_pub.publish(vel_msg)
                 except rospy.exceptions.ROSException:
                     return False
+                self.record_command_published()
                 return True
         else:
             assert False, "Unknown command mode specified"
@@ -732,7 +855,15 @@ class AgilePilotNode:
         if hasattr(self, 'model_hidden_state'):
             self.model_hidden_state = None
         print("[RUN_COMPETITION] Start publishing commands!")
+        self.navigation_started_monotonic = time.monotonic()
+        self.start_watchdog()
         self.publish_commands = True
+
+    def record_command_published(self):
+        self.command_publish_count += 1
+        if self.first_command_wall_seconds is None and self.navigation_started_monotonic is not None:
+            self.first_command_wall_seconds = time.monotonic() - self.navigation_started_monotonic
+            self.write_controller_diagnostics()
 
 
 if __name__ == "__main__":
@@ -756,3 +887,4 @@ if __name__ == "__main__":
     agile_pilot_node = AgilePilotNode(vision_based=args.vision_based, offset=args.offset, model_path=args.model_path, desVel=args.des_vel, keyboard=args.keyboard)
     rospy.spin()
     agile_pilot_node.flush_data_log()
+    sys.exit(agile_pilot_node.exit_code)

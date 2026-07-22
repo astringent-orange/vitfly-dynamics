@@ -35,6 +35,9 @@ RESULT_FIELDS = [
     "collision_count", "flight_time", "termination_elapsed_time", "termination_reason",
     "altitude_min", "altitude_mean", "altitude_max", "min_dynamic_clearance",
     "dynamic_encounter_count", "dynamic_interaction_time", "dynamic_collision",
+    "depth_frames_received", "depth_frames_usable", "depth_invalid_frames",
+    "depth_all_zero_frames", "depth_partial_zero_frames", "command_publish_count",
+    "first_command_wall_seconds", "controller_failure_detail",
     "runner_returncode", "attempt_count", "real_time_factor",
     "observed_real_time_factor", "simulator_session_id", "session_case_index",
     "case_wall_seconds", "simulator_ready_seconds", "pilot_prepare_seconds",
@@ -43,7 +46,9 @@ RESULT_FIELDS = [
     "completed_at_utc",
 ]
 ABLATION_MANIFEST = "ablation_validation_cases.csv"
-INFRASTRUCTURE_REASONS = {"simulator_error", "runner_timeout", "missing_result"}
+INFRASTRUCTURE_REASONS = {
+    "simulator_error", "input_pipeline_error", "runner_timeout", "missing_result"
+}
 ACCEPTED_RUNNER_RETURNCODES = {0, 2}
 
 
@@ -183,13 +188,20 @@ class SimulatorSession:
         return ["bash", "-lc", " && ".join(setup_commands)]
 
     def stop(self):
+        interrupted = False
         if self.process is not None:
-            terminate_process_group(self.process)
-            self.process = None
-            self._clean_stale_stack()
+            try:
+                terminate_process_group(self.process)
+            except KeyboardInterrupt:
+                interrupted = True
+            finally:
+                self.process = None
+                self._clean_stale_stack()
         if self.log is not None:
             self.log.close()
             self.log = None
+        if interrupted:
+            raise KeyboardInterrupt
 
 
 def load(path):
@@ -292,6 +304,27 @@ def evaluation_result(path):
     }
 
 
+def controller_diagnostics(path):
+    """Read optional controller counters written atomically at shutdown."""
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_text()
+        if not raw.strip():
+            return {}
+        value = yaml.safe_load(raw) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    fields = (
+        "depth_frames_received", "depth_frames_usable", "depth_invalid_frames",
+        "depth_all_zero_frames", "depth_partial_zero_frames", "command_publish_count",
+        "first_command_wall_seconds", "controller_failure_detail",
+    )
+    return {field: value.get(field, "") for field in fields}
+
+
 def select_policies(cfg, requested):
     policies = policy_index(cfg.get("policies", []))
     selected = []
@@ -338,6 +371,14 @@ def empty_result(reason, returncode):
         "dynamic_encounter_count": "",
         "dynamic_interaction_time": "",
         "dynamic_collision": "",
+        "depth_frames_received": "",
+        "depth_frames_usable": "",
+        "depth_invalid_frames": "",
+        "depth_all_zero_frames": "",
+        "depth_partial_zero_frames": "",
+        "command_publish_count": "",
+        "first_command_wall_seconds": "",
+        "controller_failure_detail": "",
         "case_wall_seconds": "",
         "simulator_ready_seconds": "",
         "pilot_prepare_seconds": "",
@@ -352,6 +393,7 @@ def terminate_process_group(process, interrupt_timeout=45.0, terminate_timeout=1
     """Stop a benchmark launch group without leaving ROS children behind."""
     if process.poll() is not None:
         return process.returncode
+    interrupted = False
     try:
         process_group = os.getpgid(process.pid)
     except OSError:
@@ -374,6 +416,11 @@ def terminate_process_group(process, interrupt_timeout=45.0, terminate_timeout=1
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             continue
+        except KeyboardInterrupt:
+            interrupted = True
+            continue
+    if interrupted:
+        raise KeyboardInterrupt
     return process.poll()
 
 
@@ -420,8 +467,10 @@ def run_attempt(
 ):
     evaluation_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__evaluation.yaml"
     attempt_log = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__attempt_{attempt}.log"
+    diagnostics_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__attempt_{attempt}__controller.json"
     evaluation_path.parent.mkdir(parents=True, exist_ok=True)
     evaluation_path.unlink(missing_ok=True)
+    diagnostics_path.unlink(missing_ok=True)
     env = os.environ.copy()
     env.update(policy_environment(policy))
     env.update({
@@ -432,6 +481,7 @@ def run_attempt(
         "VITFLY_DYNAMIC_PHASE_SEED": str(case["phase_seed"]),
         "VITFLY_DES_VEL": str(case["desired_speed"]),
         "VITFLY_EVALUATION_PATH": str(evaluation_path.resolve()),
+        "VITFLY_CONTROLLER_DIAGNOSTICS_PATH": str(diagnostics_path.resolve()),
         "VITFLY_POLICY_CONFIG": str((output / "policies.yaml").resolve()),
         "VITFLY_CASE_CONFIG": str((output / "benchmark_cases.csv").resolve()),
         "VITFLY_EVALUATION_PROFILE": str(case.get("evaluation_profile", "strict")),
@@ -447,6 +497,7 @@ def run_attempt(
         "VITFLY_EVAL_BOUNDING_BOX": ",".join(str(value) for value in profile.get("bounding_box", [-5, 65, -10, 10, 0, 10])),
         "VITFLY_EVAL_PLOTS": str(profile.get("plots", False)).lower(),
         "VITFLY_INFERENCE_TIMING_LOGS": "false",
+        "VITFLY_NO_COMMAND_TIMEOUT_SECONDS": str(profile.get("no_command_timeout_seconds", 5.0)),
         "VITFLY_REAL_TIME_FACTOR": str(real_time_factor),
         "VITFLY_REUSE_SIMULATOR": "1" if reuse_simulator else "0",
         "VITFLY_SIMULATOR_SESSION_ID": simulator_session or "",
@@ -484,14 +535,16 @@ def run_attempt(
             terminate_process_group(process)
             output_thread.join(timeout=5)
             result = empty_result("runner_timeout", 124)
+            result.update(controller_diagnostics(diagnostics_path))
             result.update(timing_metrics(timing, wall_start, time.monotonic()))
             result["simulator_session_startup_seconds"] = simulator_session_startup_seconds
             return result
         except KeyboardInterrupt:
             terminate_process_group(process)
-            output_thread.join(timeout=5)
             raise
         output_thread.join(timeout=5)
+
+    diagnostics = controller_diagnostics(diagnostics_path)
 
     if returncode == 130:
         raise KeyboardInterrupt
@@ -500,6 +553,7 @@ def run_attempt(
     summary = evaluation_result(evaluation_path)
     if returncode == 0 and summary is None:
         result = empty_result("missing_result", 0)
+        result.update(diagnostics)
         result.update(metrics)
         result["simulator_session_startup_seconds"] = simulator_session_startup_seconds
         return result
@@ -509,17 +563,23 @@ def run_attempt(
         summary["success"] = 0
         summary["termination_reason"] = "controller_error"
     elif returncode == 3:
-        result = empty_result("simulator_error", 3)
+        reason = "simulator_error"
+        if summary is not None and summary.get("termination_reason") == "input_pipeline_error":
+            reason = "input_pipeline_error"
+        result = empty_result(reason, 3)
+        result.update(diagnostics)
         result.update(metrics)
         result["simulator_session_startup_seconds"] = simulator_session_startup_seconds
         return result
     elif returncode != 0:
         result = empty_result("simulator_error", returncode)
+        result.update(diagnostics)
         result.update(metrics)
         result["simulator_session_startup_seconds"] = simulator_session_startup_seconds
         return result
     summary["runner_returncode"] = returncode
     summary.update(metrics)
+    summary.update(diagnostics)
     summary["simulator_session_startup_seconds"] = simulator_session_startup_seconds
     try:
         simulated_elapsed = float(summary.get("termination_elapsed_time") or "")
@@ -534,7 +594,7 @@ def run_attempt(
 def attempt_is_retryable(result):
     return (
         int(result.get("runner_returncode", 0)) in {3, 124}
-        or result.get("termination_reason") == "missing_result"
+        or result.get("termination_reason") in {"missing_result", "input_pipeline_error"}
     )
 
 
@@ -597,6 +657,38 @@ def upsert_result(rows, new_row):
     ] + [new_row]
 
 
+def forced_result_keys(policies, cases, map_ids=(), case_ids=()):
+    map_ids = {str(value) for value in map_ids}
+    case_ids = set(case_ids)
+    return {
+        (policy["id"], case["case_id"])
+        for policy in policies
+        for case in cases
+        if str(case.get("map_id")) in map_ids or case["case_id"] in case_ids
+    }
+
+
+def quarantine_forced_rows(result_path, rows, forced_keys, now=None):
+    """Atomically remove forced rows after saving a recoverable quarantine copy."""
+    quarantined = [
+        row for row in rows
+        if (row.get("policy_id"), row.get("case_id")) in forced_keys
+    ]
+    if not quarantined:
+        return rows, None, 0
+    recovery_dir = result_path.parent / "recovery"
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    quarantine_path = recovery_dir / f"quarantined_results_{timestamp}.csv"
+    write_csv(quarantine_path, RESULT_FIELDS, quarantined)
+    remaining = [
+        row for row in rows
+        if (row.get("policy_id"), row.get("case_id")) not in forced_keys
+    ]
+    write_csv(result_path, RESULT_FIELDS, remaining)
+    return remaining, quarantine_path, len(quarantined)
+
+
 def prior_attempt_count(row):
     try:
         return max(0, int(row.get("attempt_count") or 0))
@@ -620,6 +712,14 @@ def build_parser():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", help="Result directory; defaults to a timestamped directory for ablation runs")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--rerun-map", action="append", default=[],
+        help="With --resume, invalidate and rerun all selected cases for a map id",
+    )
+    parser.add_argument(
+        "--rerun-case", action="append", default=[],
+        help="With --resume, invalidate and rerun an exact case id; repeatable",
+    )
     parser.add_argument("--runner-timeout", type=float, default=420.0)
     parser.add_argument(
         "--simulator-retries",
@@ -695,6 +795,12 @@ def main(argv=None):
         cases = cases[:args.limit]
     if not cases:
         raise ValueError("case manifest selection is empty")
+    if (args.rerun_map or args.rerun_case) and not args.resume:
+        parser.error("--rerun-map/--rerun-case require --resume")
+    selected_case_ids = {case["case_id"] for case in cases}
+    unknown_rerun_cases = set(args.rerun_case) - selected_case_ids
+    if unknown_rerun_cases:
+        parser.error(f"unknown rerun case id: {sorted(unknown_rerun_cases)[0]}")
     for case in cases:
         validate_case_scene(case)
     output.mkdir(parents=True, exist_ok=True)
@@ -705,11 +811,6 @@ def main(argv=None):
     previous_rows = {
         (row.get("policy_id"), row.get("case_id")): row
         for row in rows
-    }
-    completed_keys = {
-        (row["policy_id"], row["case_id"])
-        for row in rows
-        if not result_needs_rerun(row)
     }
     frozen_config = output / "config.yaml"
     frozen_cases = output / "benchmark_cases.csv"
@@ -742,6 +843,19 @@ def main(argv=None):
             f"results already contain real_time_factor={sorted(existing_factors)}; "
             f"requested {real_time_factor}; use a new output directory"
         )
+
+    forced_keys = forced_result_keys(policies, cases, args.rerun_map, args.rerun_case)
+    if forced_keys:
+        rows, quarantine_path, quarantine_count = quarantine_forced_rows(
+            result_path, rows, forced_keys
+        )
+        if quarantine_path is not None:
+            print(f"[BENCHMARK] quarantined {quarantine_count} rows to {quarantine_path}")
+    completed_keys = {
+        (row["policy_id"], row["case_id"])
+        for row in rows
+        if not result_needs_rerun(row)
+    }
 
     session_groups = []
     if reuse_simulator:
@@ -882,4 +996,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("[BENCHMARK] Interrupted; cleanup complete.")
+        raise SystemExit(130)

@@ -9,26 +9,29 @@ MANIFEST = ROOT / "envtest" / "benchmark" / "manifests"
 
 
 class ManifestTest(unittest.TestCase):
-    SCENARIOS = {
+    ABLATION_SCENARIOS = {
         "dynamic_speed_1mps",
         "dynamic_speed_2mps",
         "dynamic_speed_3mps",
         "dynamic_speed_4mps",
+        "dynamic_speed_5mps",
         "flight_speed_2",
         "flight_speed_4",
         "flight_speed_6",
         "flight_speed_8",
+        "flight_speed_10",
     }
+    COMPARISON_SCENARIOS = ABLATION_SCENARIOS - {"dynamic_speed_5mps", "flight_speed_10"}
 
     def read(self, name):
         with open(MANIFEST / name, newline="") as stream:
             return list(csv.DictReader(stream))
 
     def test_expected_case_counts(self):
-        self.assertEqual(len(self.read("ablation_validation_cases.csv")), 400)
+        self.assertEqual(len(self.read("ablation_validation_cases.csv")), 500)
         self.assertEqual(len(self.read("comparison_test_cases.csv")), 400)
 
-    def test_each_split_uses_two_phase_seeds(self):
+    def test_each_split_uses_five_phase_seeds(self):
         self.assertEqual({row["phase_seed"] for row in self.read("ablation_validation_cases.csv")},
                          {"8000", "8001", "8002", "8003", "8004"})
         self.assertEqual(
@@ -41,7 +44,8 @@ class ManifestTest(unittest.TestCase):
             rows = self.read(name)
             self.assertEqual(len({row["case_id"] for row in rows}), len(rows))
             counts = Counter(row["scenario_id"] for row in rows)
-            self.assertEqual(set(counts), self.SCENARIOS)
+            expected = self.ABLATION_SCENARIOS if "ablation" in name else self.COMPARISON_SCENARIOS
+            self.assertEqual(set(counts), expected)
             self.assertEqual(set(counts.values()), {50})
 
     def test_each_scenario_changes_only_one_baseline_factor(self):
@@ -59,8 +63,10 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual({row["forest_density"] for row in rows}, {"6.0"})
         self.assertEqual(actual["dynamic_speed_1mps"], ("5.0", "6.0", "1.0"))
         self.assertEqual(actual["dynamic_speed_4mps"], ("5.0", "6.0", "4.0"))
+        self.assertEqual(actual["dynamic_speed_5mps"], ("5.0", "6.0", "5.0"))
         self.assertEqual(actual["flight_speed_2"], ("2.0", "6.0", "2.0"))
         self.assertEqual(actual["flight_speed_8"], ("8.0", "6.0", "2.0"))
+        self.assertEqual(actual["flight_speed_10"], ("10.0", "6.0", "2.0"))
 
     def test_density_is_fixed_and_corridor_count_is_70(self):
         rows = self.read("comparison_test_cases.csv")
@@ -69,7 +75,7 @@ class ManifestTest(unittest.TestCase):
 
     def test_all_cases_use_named_positive_dynamic_speeds(self):
         rows = self.read("ablation_validation_cases.csv") + self.read("comparison_test_cases.csv")
-        self.assertEqual({row["dynamic_speed_mps"] for row in rows}, {"1.0", "2.0", "3.0", "4.0"})
+        self.assertEqual({row["dynamic_speed_mps"] for row in rows}, {"1.0", "2.0", "3.0", "4.0", "5.0"})
         self.assertTrue(all(row["dynamic_profile"].startswith("dynamic_speed_") for row in rows))
 
 

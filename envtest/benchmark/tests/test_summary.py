@@ -8,9 +8,11 @@ from unittest.mock import patch
 from envtest.benchmark.summarize_results import (
     DEFAULT_TABLE_OUTPUT,
     FACTOR_SPECS,
+    HIGH_SPEED_FACTOR_SPECS,
     build_parser as build_summary_parser,
     build_factor_figure,
     latest_policy_result_paths,
+    latest_policy_result_rows,
     paired_comparisons,
     plot_factor_sweeps,
     read_result_files,
@@ -39,6 +41,27 @@ class SummaryTest(unittest.TestCase):
         args = build_summary_parser().parse_args([])
         self.assertIsNone(args.results)
         self.assertEqual(args.output, DEFAULT_TABLE_OUTPUT)
+
+    def test_latest_policy_result_rows_merges_complementary_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = {"c1", "c2"}
+            for index, policy in enumerate(("single", "adjacent", "skip_one")):
+                old = root / f"{policy}_old" / "results.csv"
+                new = root / f"{policy}_high_speed" / "results.csv"
+                old.parent.mkdir()
+                new.parent.mkdir()
+                header = "policy_id,case_id\n"
+                old.write_text(header + f"{policy},c1\n")
+                new.write_text(header + f"{policy},c2\n")
+                os.utime(old, (100 + index, 100 + index))
+                os.utime(new, (200 + index, 200 + index))
+            rows, sources = latest_policy_result_rows(
+                root, ("single", "adjacent", "skip_one"), expected
+            )
+            self.assertEqual(len(rows), 6)
+            self.assertEqual({row["case_id"] for row in rows}, expected)
+            self.assertEqual(len(sources), 6)
 
     def synthetic_summaries(self):
         rows = []
@@ -133,28 +156,35 @@ class SummaryTest(unittest.TestCase):
                 [text.get_text() for text in figure.legends[0].get_texts()],
                 ["单帧", "相邻双帧", "隔帧双帧"],
             )
-            self.assertTrue(all(text.get_fontsize() == 12 for text in figure.legends[0].get_texts()))
+            self.assertTrue(all(text.get_fontsize() == 16 for text in figure.legends[0].get_texts()))
             self.assertEqual(len(axes[0].lines), 3)
             self.assertEqual(len(axes[1].lines), 3)
             self.assertEqual(len(axes[2].lines), 3)
+            self.assertEqual(
+                [line.get_marker() for line in axes[0].lines],
+                ["o", "s", "^"],
+            )
             self.assertEqual(len(axes[0].collections), 0)
             self.assertGreater(axes[0].get_ylim()[0], 0.0)
-            self.assertLess(axes[1].get_ylim()[1], 1.0)
+            self.assertLessEqual(axes[0].get_ylim()[1], 100.0)
+            self.assertLess(axes[1].get_ylim()[1], 100.0)
             for axis in axes[:2]:
                 tick_spacing = axis.get_yticks()[1] - axis.get_yticks()[0]
-                self.assertAlmostEqual(tick_spacing, 0.04)
+                self.assertAlmostEqual(tick_spacing, 10.0)
             self.assertLessEqual(len(axes[2].get_yticks()), 7)
-            self.assertEqual([axis.get_ylabel() for axis in axes], ["", "", ""])
             self.assertEqual(
-                [axis.texts[-1].get_text() for axis in axes],
+                [axis.get_ylabel() for axis in axes],
                 [
-                    "成功率",
-                    "碰撞率",
-                    "成功飞行时间中位数（秒）",
+                    "成功率（%）",
+                    "碰撞率（%）",
+                    "飞行时间（秒）",
                 ],
             )
-            self.assertTrue(all(axis.texts[-1].get_position()[1] < 0 for axis in axes))
-            self.assertEqual(figure._suptitle.get_text(), spec["xlabel_zh"])
+            self.assertEqual(
+                [axis.get_xlabel() for axis in axes],
+                [spec["xaxis_label_zh"]] * 3,
+            )
+            self.assertEqual(figure._suptitle.get_text(), spec["title_zh"])
             width, height = figure.get_size_inches()
             self.assertGreater(width, height)
             positions = [axis.get_position() for axis in axes]
@@ -168,8 +198,10 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual([spec["filename"] for spec in FACTOR_SPECS], [
             "ablation_dynamic_speed.png", "ablation_flight_speed.png",
         ])
-        self.assertEqual(FACTOR_SPECS[0]["x_values"], (1.0, 2.0, 3.0, 4.0))
-        self.assertEqual(FACTOR_SPECS[1]["x_values"], (2.0, 4.0, 6.0, 8.0))
+        self.assertEqual(FACTOR_SPECS[0]["x_values"], (1.0, 2.0, 3.0, 4.0, 5.0))
+        self.assertEqual(FACTOR_SPECS[1]["x_values"], (2.0, 4.0, 6.0, 8.0, 10.0))
+        self.assertEqual(HIGH_SPEED_FACTOR_SPECS[0]["x_values"], (2.0, 3.0, 4.0, 5.0))
+        self.assertEqual(HIGH_SPEED_FACTOR_SPECS[1]["x_values"], (4.0, 6.0, 8.0, 10.0))
 
     def test_missing_successful_time_is_an_empty_plot_point(self):
         try:
@@ -184,7 +216,7 @@ class SummaryTest(unittest.TestCase):
             row for row in summaries
             if row["policy_id"] == "single" and row["scenario_id"] == "dynamic_speed_1mps"
         )
-        target["successful_time_median"] = ""
+        target["successful_time_mean"] = ""
         figure, axes = build_factor_figure(summaries, FACTOR_SPECS[0])
         self.assertTrue(math.isnan(axes[2].lines[0].get_ydata()[0]))
         plt.close(figure)

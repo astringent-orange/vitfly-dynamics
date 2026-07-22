@@ -30,12 +30,25 @@ COMPARISON_RESULTS_ROOT = ROOT / "results" / "comparison"
 DEFAULT_TABLE_OUTPUT = COMPARISON_RESULTS_ROOT / "table"
 DEFAULT_CASES = ROOT / "envtest" / "benchmark" / "manifests" / "comparison_test_cases.csv"
 COMPARISON_POLICY_ORDER = ("best_ours", "vitfly", "fastplanner", "egoplanner")
-COMPARISON_FACTOR_SPECS = tuple(
+COMPARISON_FACTOR_SPECS = (
     dict(
-        spec,
-        filename=spec["filename"].replace("ablation_", "comparison_"),
-    )
-    for spec in FACTOR_SPECS
+        FACTOR_SPECS[0],
+        filename="comparison_dynamic_speed.png",
+        percentage_tick_step=20.0,
+        tick_labels_zh=("1", "2", "3", "4"),
+        x_values=(1.0, 2.0, 3.0, 4.0),
+        tick_labels=("1", "2", "3", "4"),
+        scenarios=("dynamic_speed_1mps", "dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps"),
+    ),
+    dict(
+        FACTOR_SPECS[1],
+        filename="comparison_flight_speed.png",
+        percentage_tick_step=20.0,
+        tick_labels_zh=("2", "4", "6", "8"),
+        x_values=(2.0, 4.0, 6.0, 8.0),
+        tick_labels=("2", "4", "6", "8"),
+        scenarios=("flight_speed_2", "flight_speed_4", "flight_speed_6", "flight_speed_8"),
+    ),
 )
 
 

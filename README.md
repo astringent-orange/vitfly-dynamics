@@ -168,10 +168,10 @@ bash launch_evaluation.bash 1 vision fixed_env offset=0
 
 | 扫描因素 | 取值 | 固定条件 |
 |---|---|---|
-| 动态障碍速度 | 1 / 2 / 3 / 4m/s | 无人机5m/s、森林密度6棵/100平方米 |
-| 无人机速度 | 2 / 4 / 6 / 8m/s | 森林密度6棵/100平方米、动态障碍2m/s |
+| 动态障碍速度 | 1 / 2 / 3 / 4 / 5m/s | 无人机5m/s、森林密度6棵/100平方米 |
+| 无人机速度 | 2 / 4 / 6 / 8 / 10m/s | 森林密度6棵/100平方米、动态障碍2m/s |
 
-动态速度扫描固定无人机5m/s，飞行速度扫描固定动态障碍2m/s，因此实际使用8个条件：
+动态速度扫描固定无人机5m/s，飞行速度扫描固定动态障碍2m/s，因此实际使用10个条件：
 
 每个生成场景包含6个纵向交互站点，每个站点分别放置低、中、高三个动态障碍，共18个障碍物。
 三个高度层覆盖约0.8–9.0m，并使用垂直正弦运动；不同速度profile共享完全相同的空间轨迹，只缩放轨迹时间。
@@ -181,23 +181,25 @@ dynamic_speed_1mps
 dynamic_speed_2mps
 dynamic_speed_3mps
 dynamic_speed_4mps
+dynamic_speed_5mps
 flight_speed_2
 flight_speed_4
 flight_speed_6
 flight_speed_8
+flight_speed_10
 ```
 
 每个模型运行：
 
 ```text
-8个条件 × 10张地图 × 5个phase seed = 400轮
+10个条件 × 10张地图 × 5个phase seed = 500轮
 ```
 
-下面每条模型命令默认都会完成全部400轮。配置文件中的Benchmark仿真速度为 `1.5×`，即只缩短墙钟时间，不改变仿真中的无人机或障碍物物理速度；可用 `--real-time-factor 1.0` 临时恢复原速。默认按 `scene_id` 复用ROS/Flightmare仿真器：相同地图、森林密度和动态障碍速度的case共用一个仿真会话，每个case仍会重新启动evaluator/controller并重置无人机和动态障碍phase。仿真器启动、必需topic或结果文件发生基础设施故障时，程序默认完整清理并自动重试一次；第二次仍失败则保存诊断并停止整批，避免将环境故障计入模型性能。
+完整运行时每条模型命令会完成500轮。当前已有的8个条件400轮结果保持不变，只需补跑两个高速条件各50轮，共100轮/模型。配置文件中的Benchmark仿真速度为 `1.5×`，即只缩短墙钟时间，不改变仿真中的无人机或障碍物物理速度；可用 `--real-time-factor 1.0` 临时恢复原速。默认按 `scene_id` 复用ROS/Flightmare仿真器：相同地图、森林密度和动态障碍速度的case共用一个仿真会话，每个case仍会重新启动evaluator/controller并重置无人机和动态障碍phase。仿真器启动、必需topic或结果文件发生基础设施故障时，程序默认完整清理并自动重试一次；第二次仍失败则保存诊断并停止整批，避免将环境故障计入模型性能。
 
 同一个 `scene_id` 的多个phase或设定飞行速度会共用一个仿真器；不同地图或动态障碍速度会启动新的仿真会话。复用模式下Runner负责整组仿真器的启动、重启和清理，不能与已经手动启动的ROS/Flightmare实例混用。需要进行隔离模式对照或排查状态残留时，使用 `--no-reuse-simulator` 强制每个case完整重启。
 
-三个模型合计 **1200轮**。汇总指标包括：
+三个模型完整合计 **1500轮**；本次新增部分为300轮。汇总指标包括：
 
 - 成功率：到达终点且全程零碰撞的rollout比例。
 - 碰撞率：至少发生一次碰撞的rollout比例。
@@ -226,6 +228,19 @@ python3 envtest/benchmark/run_benchmark.py \
   --policy skip_one
 ```
 
+只补跑新增高速条件时，使用两个场景筛选（每个模型100轮）：
+
+```bash
+python3 envtest/benchmark/run_benchmark.py \
+  --policy single \
+  --scenario dynamic_speed_5mps \
+  --scenario flight_speed_10 \
+  --output results/ablation/single_high_speed_YYYYMMDD_HHMMSS \
+  --resume
+```
+
+将 `single` 替换为 `adjacent` 或 `skip_one`，分别补跑另外两个模型。
+
 需要临时关闭默认的同场景复用时：
 
 ```bash
@@ -242,22 +257,24 @@ results/ablation/adjacent_20260717_173510/
 results/ablation/skip_one_20260717_195845/
 ```
 
-三个模型全部完成400轮后直接运行：
+三个模型的原有400轮和新增100轮都完成后直接运行：
 
 ```bash
 python3 envtest/benchmark/summarize_results.py
 ```
 
-汇总脚本自动选择三个模型各自最新修改的 `results.csv`。汇总表格和图像固定写入 `results/ablation/table/`，再次运行会覆盖上一次的汇总结果。需要汇总指定批次时，仍可显式传入多个 `--results` 和一个 `--output`。
+汇总脚本会自动合并每个模型最新的互补结果分片（原400轮和新增100轮）。汇总表格和图像固定写入 `results/ablation/table/`，再次运行会覆盖上一次的汇总结果。需要汇总指定批次时，仍可显式传入多个 `--results` 和一个 `--output`。
 
 汇总后生成两张图：
 
 ```text
 ablation_dynamic_speed.png
 ablation_flight_speed.png
+ablation_dynamic_speed_high_speed.png
+ablation_flight_speed_high_speed.png
 ```
 
-每张图的横轴是对应因素的四个取值，三条曲线对应 `single`、`adjacent` 和 `skip_one`。图中从上到下依次为带95% bootstrap CI的成功率、碰撞率和成功rollout的中位飞行时间；没有成功rollout时，飞行时间点留空。
+前两张图显示完整五档取值；后两张图显示高速区间，动态速度为2/3/4/5m/s、飞行速度为4/6/8/10m/s。三条曲线对应 `single`、`adjacent` 和 `skip_one`。图中从上到下依次为成功率、碰撞率和成功rollout的平均飞行时间；没有成功rollout时，飞行时间点留空。
 
 主要参数：
 
@@ -272,6 +289,8 @@ ablation_flight_speed.png
 - `--no-reuse-simulator`：临时关闭复用，强制每个case独立启动仿真器。
 - `--scenario <name>`：可选，只运行指定条件，例如 `dynamic_speed_1mps`。
 - `--case-id <id>`：可选，只运行manifest中的指定case；可重复传入，用于精确复测并替换异常结果。
+- `--rerun-map <id>`：仅与 `--resume` 配合使用，将指定地图已有结果先备份到 `recovery/` 后强制补跑；可重复传入。
+- `--rerun-case <id>`：仅与 `--resume` 配合使用，强制补跑指定case；可重复传入。
 
 Benchmark 的每个 case 会在启动日志中记录阶段标记，并把墙钟耗时写入 `results.csv`：
 `case_wall_seconds`（整轮）、`simulator_ready_seconds`（仿真器就绪）、
@@ -288,6 +307,9 @@ Benchmark 初始化中的 `off`、`reset_sim` 和 `enable` 不再依赖固定等
 `--simulator-retries` 重试策略；复用仿真器时还会校验 `reset_benchmark` 服务返回的 `success` 字段。
 普通手动测试仍保留原有的固定等待和 `rostopic pub --once` 行为。Benchmark 默认关闭控制器逐帧推理计时日志，
 不会影响模型推理或最终统计；非 Benchmark 可设置 `VITFLY_INFERENCE_TIMING_LOGS=true` 保留该日志。
+Benchmark 控制器会保留含少量零像素的有效深度帧，仅拒绝全零、非法尺寸或非有限帧。导航开始后若5秒内没有速度指令，
+没有可用深度帧的情况记为可重试的 `input_pipeline_error`；有可用帧但没有指令的情况记为 `controller_error`。
+每次尝试的深度帧计数、命令计数和失败详情写入对应的 `__controller.json` 诊断文件。
 
 按 `Ctrl+C` 中断时，当前case不会写入结果；脚本会先清理其进程。之后使用原输出目录继续，例如：
 
@@ -298,7 +320,9 @@ python3 envtest/benchmark/run_benchmark.py \
   --resume
 ```
 
-`--resume`也会自动重跑并替换已有的 `simulator_error`、`runner_timeout` 或 `missing_result` 行，不会产生重复case。汇总只接受每个模型完整覆盖manifest中400个唯一case、且不存在基础设施故障或未知退出码的结果；退出码为2的 `controller_error` 是模型失败，允许进入统计。汇总脚本不自动排序或选择模型，需结合 `summary.csv`、`paired_model_differences.csv` 和两张图人工决定用于主对比实验的模型。
+`--resume`也会自动重跑并替换已有的 `simulator_error`、`input_pipeline_error`、`runner_timeout` 或 `missing_result` 行，不会产生重复case。
+若需要修复某一地图的历史异常结果，可使用 `--resume --rerun-map 4`；runner会先把旧行原子备份到
+`recovery/quarantined_results_<时间>.csv`。汇总只接受每个模型完整覆盖manifest中500个唯一case、且不存在基础设施故障或未知退出码的结果；退出码为2的 `controller_error` 是模型失败，允许进入统计。汇总脚本不自动排序或选择模型，需结合 `summary.csv`、`paired_model_differences.csv` 和四张图人工决定用于主对比实验的模型。
 
 ### Comparison experiment
 
@@ -360,7 +384,7 @@ comparison_dynamic_speed.png
 comparison_flight_speed.png
 ```
 
-每张图包含成功率及95% bootstrap CI、碰撞率、成功rollout中位飞行时间三个纵向子图，以及 `best_ours`、`vitfly`、`fastplanner`、`egoplanner` 四条曲线。需要汇总指定批次时，可以重复传入 `--results` 并用 `--output` 指定目录。
+每张图包含成功率及95% bootstrap CI、碰撞率、成功rollout平均飞行时间三个纵向子图，以及 `best_ours`、`vitfly`、`fastplanner`、`egoplanner` 四条曲线。需要汇总指定批次时，可以重复传入 `--results` 并用 `--output` 指定目录。
 
 #### FastPlanner/EGO-Planner接入接口
 

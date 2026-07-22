@@ -30,12 +30,14 @@ class SceneGenerationTest(unittest.TestCase):
         speed_2 = duration("map_000_density_6_dynamic_speed_2mps")
         speed_3 = duration("map_000_density_6_dynamic_speed_3mps")
         speed_4 = duration("map_000_density_6_dynamic_speed_4mps")
+        speed_5 = duration("map_000_density_6_dynamic_speed_5mps")
         self.assertAlmostEqual(speed_1 / speed_2, 2.0, places=5)
         self.assertAlmostEqual(speed_2 / speed_3, 1.5, places=5)
         self.assertAlmostEqual(speed_2 / speed_4, 2.0, places=5)
+        self.assertAlmostEqual(speed_2 / speed_5, 2.5, places=5)
 
     def test_every_speed_profile_has_dynamic_obstacles(self):
-        for speed in (1, 2, 3, 4):
+        for speed in (1, 2, 3, 4, 5):
             scene = SCENES / f"map_000_density_6_dynamic_speed_{speed}mps"
             with open(scene / "dynamic_obstacles.yaml") as stream:
                 config = yaml.safe_load(stream)

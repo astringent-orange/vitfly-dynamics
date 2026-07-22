@@ -150,7 +150,7 @@ class EvaluationLifecycleTest(unittest.TestCase):
     def test_launcher_waits_for_result_before_controller_error(self):
         source = (ROOT / "launch_evaluation.bash").read_text()
         monitor_loop = source.index("while ps -p $PY_PID")
-        controller_branch = source.index("if ! ps -p $COMP_PID", monitor_loop)
+        controller_branch = source.index('if ! ps -p "$COMP_PID"', monitor_loop)
         wait = source.index("wait_for_evaluator_result 5", controller_branch)
         failure = source.index("write_rollout_failure_summary controller_error", controller_branch)
         self.assertLess(wait, failure)
@@ -212,6 +212,28 @@ class EvaluationLifecycleTest(unittest.TestCase):
         timing_log = source.index("compute_command_vision_based took")
         guard = source.rfind("if self.inference_timing_logs", 0, timing_log)
         self.assertGreater(guard, source.index("def img_callback"))
+
+    def test_benchmark_controller_validates_depth_without_rejecting_sparse_zero_pixels(self):
+        source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
+        helper = source.index("def prepare_depth_frame")
+        callback = source.index("def img_callback")
+        helper_body = source[helper:callback]
+        self.assertIn('return normalized, "partial_zero"', helper_body)
+        self.assertIn('return None, "all_zero"', helper_body)
+        self.assertIn("np.isnan(image).any()", helper_body)
+        self.assertIn("np.isneginf(image).any()", helper_body)
+        self.assertNotIn("expected_shape", helper_body)
+
+    def test_benchmark_controller_has_wall_clock_no_command_watchdog(self):
+        source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
+        self.assertIn('VITFLY_NO_COMMAND_TIMEOUT_SECONDS', source)
+        self.assertIn('self.exit_code = 3', source)
+        self.assertIn('self.controller_failure_detail = "no_command"', source)
+        self.assertIn('time.monotonic()', source)
+
+    def test_checkpoint_loader_uses_weights_only(self):
+        source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
+        self.assertIn("weights_only=True", source)
 
     def test_benchmark_launcher_emits_stage_markers_and_acknowledgements(self):
         source = (ROOT / "launch_evaluation.bash").read_text()

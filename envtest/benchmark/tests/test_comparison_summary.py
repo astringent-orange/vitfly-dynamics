@@ -33,7 +33,7 @@ class ComparisonSummaryTest(unittest.TestCase):
                     "scenario_id": scenario,
                     "success_rate": success,
                     "collision_rate": 1.0 - success,
-                    "successful_time_median": 12.0 + scenario_index,
+                    "successful_time_mean": 12.0 + scenario_index,
                     "success_ci_low": max(0.0, success - 0.08),
                     "success_ci_high": min(1.0, success + 0.08),
                 })
@@ -93,6 +93,13 @@ class ComparisonSummaryTest(unittest.TestCase):
                 self.assertEqual(len(axes[0].get_legend_handles_labels()[1]), 4)
                 self.assertEqual(len(axes[1].lines), 4)
                 self.assertEqual(len(axes[2].lines), 4)
+                self.assertEqual(
+                    [line.get_marker() for line in axes[0].lines],
+                    ["s", "D", "P", "X"],
+                )
+                for axis in axes[:2]:
+                    tick_spacing = axis.get_yticks()[1] - axis.get_yticks()[0]
+                    self.assertAlmostEqual(tick_spacing, 20.0)
                 plt.close(figure)
         plt.close("all")
 

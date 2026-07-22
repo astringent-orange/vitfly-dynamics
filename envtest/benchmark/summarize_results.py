@@ -32,21 +32,43 @@ FACTOR_SPECS = (
         "filename": "ablation_dynamic_speed.png",
         "xlabel": "Dynamic obstacle speed (m/s)",
         "xlabel_zh": "动态障碍物速度（米/秒）",
+        "title_zh": "不同障碍物速度下实验",
+        "xaxis_label_zh": "障碍物飞行速度（米/秒）",
         "short_label_zh": "动态",
-        "tick_labels_zh": ("1", "2", "3", "4"),
-        "x_values": (1.0, 2.0, 3.0, 4.0),
-        "tick_labels": ("1", "2", "3", "4"),
-        "scenarios": ("dynamic_speed_1mps", "dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps"),
+        "tick_labels_zh": ("1", "2", "3", "4", "5"),
+        "x_values": (1.0, 2.0, 3.0, 4.0, 5.0),
+        "tick_labels": ("1", "2", "3", "4", "5"),
+        "scenarios": ("dynamic_speed_1mps", "dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps", "dynamic_speed_5mps"),
     },
     {
         "filename": "ablation_flight_speed.png",
         "xlabel": "Desired flight speed (m/s)",
         "xlabel_zh": "设定飞行速度（米/秒）",
+        "title_zh": "不同期望速度下实验",
+        "xaxis_label_zh": "期望飞行速度（米/秒）",
         "short_label_zh": "飞行",
-        "tick_labels_zh": ("2", "4", "6", "8"),
-        "x_values": (2.0, 4.0, 6.0, 8.0),
-        "tick_labels": ("2", "4", "6", "8"),
-        "scenarios": ("flight_speed_2", "flight_speed_4", "flight_speed_6", "flight_speed_8"),
+        "tick_labels_zh": ("2", "4", "6", "8", "10"),
+        "x_values": (2.0, 4.0, 6.0, 8.0, 10.0),
+        "tick_labels": ("2", "4", "6", "8", "10"),
+        "scenarios": ("flight_speed_2", "flight_speed_4", "flight_speed_6", "flight_speed_8", "flight_speed_10"),
+    },
+)
+HIGH_SPEED_FACTOR_SPECS = (
+    {
+        **FACTOR_SPECS[0],
+        "filename": "ablation_dynamic_speed_high_speed.png",
+        "tick_labels_zh": ("2", "3", "4", "5"),
+        "x_values": (2.0, 3.0, 4.0, 5.0),
+        "tick_labels": ("2", "3", "4", "5"),
+        "scenarios": ("dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps", "dynamic_speed_5mps"),
+    },
+    {
+        **FACTOR_SPECS[1],
+        "filename": "ablation_flight_speed_high_speed.png",
+        "tick_labels_zh": ("4", "6", "8", "10"),
+        "x_values": (4.0, 6.0, 8.0, 10.0),
+        "tick_labels": ("4", "6", "8", "10"),
+        "scenarios": ("flight_speed_4", "flight_speed_6", "flight_speed_8", "flight_speed_10"),
     },
 )
 LEGACY_PLOT_FILENAMES = (
@@ -61,10 +83,32 @@ POLICY_DISPLAY_NAMES_ZH = {
     "adjacent": "相邻双帧",
     "skip_one": "隔帧双帧",
     "best_ours": "本文模型",
-    "vitfly": "原版模型",
-    "fastplanner": "快速规划器",
-    "egoplanner": "局部规划器",
+    "vitfly": "ViTFly",
+    "fastplanner": "FastPlanner",
+    "egoplanner": "EGO-Planner",
 }
+POLICY_COLORS = {
+    # The proposed adjacent-frame policy keeps orange across experiments.
+    # Comparison baselines use colors distinct from the ablation curves.
+    "vitfly": "#9467bd",
+    "adjacent": "#ff7f0e",
+    "skip_one": "#2ca02c",
+    "fastplanner": "#8c564b",
+    "egoplanner": "#1f4e79",
+}
+POLICY_MARKERS = {
+    "single": "o",
+    "adjacent": "s",
+    "skip_one": "^",
+    # The selected proposed model keeps the adjacent-frame marker in the
+    # formal comparison plots.
+    "best_ours": "s",
+    "vitfly": "D",
+    "fastplanner": "P",
+    "egoplanner": "X",
+}
+PLOT_TEXT_SIZE = 16
+PLOT_TICK_SIZE = 14
 CHINESE_FONT_PATHS = (
     Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
@@ -161,6 +205,47 @@ def latest_named_result_paths(root, policy_order):
 def latest_policy_result_paths(root=ABLATION_RESULTS_ROOT):
     """Find the most recently modified result file for every ablation policy."""
     return latest_named_result_paths(root, POLICY_ORDER)
+
+
+def latest_policy_result_rows(root, policy_order, expected_case_ids):
+    """Merge the newest complementary result shards for each policy.
+
+    Ablation runs may keep the original 400-case result and add a separate
+    100-case high-speed result.  Newer rows win for the same case, while
+    older rows are retained only when they cover a case absent from newer
+    shards.  Integrity validation remains the final authority.
+    """
+    expected = set(expected_case_ids)
+    merged = []
+    sources = []
+    for policy in policy_order:
+        candidates = sorted(
+            (path for path in Path(root).glob(f"{policy}_*/results.csv") if path.is_file()),
+            key=lambda path: (path.stat().st_mtime_ns, str(path)),
+            reverse=True,
+        )
+        if not candidates:
+            raise FileNotFoundError(f"no results found for {policy} under {root}")
+        by_case = {}
+        for path in candidates:
+            file_rows = read_csv(path)
+            contributed = False
+            for row in file_rows:
+                if row.get("policy_id") != policy or row.get("case_id") not in expected:
+                    continue
+                if row["case_id"] not in by_case:
+                    by_case[row["case_id"]] = row
+                    contributed = True
+            if contributed:
+                sources.append(path)
+            if len(by_case) == len(expected):
+                break
+        if len(by_case) != len(expected):
+            raise ValueError(
+                f"incomplete result shards for {policy}: {len(by_case)}/{len(expected)} cases"
+            )
+        merged.extend(by_case.values())
+    return merged, sources
 
 
 def write_csv(path, fields, rows):
@@ -352,9 +437,9 @@ def factor_policy_series(summaries, spec, policy_order=POLICY_ORDER):
                 continue
             success_rates.append(float(row["success_rate"]))
             collision_rates.append(float(row["collision_rate"]))
-            median_time = row.get("successful_time_median")
+            mean_time = row.get("successful_time_mean")
             flight_times.append(
-                float(median_time) if median_time not in ("", None) else float("nan")
+                float(mean_time) if mean_time not in ("", None) else float("nan")
             )
         series.append((policy, success_rates, collision_rates, flight_times))
     return series
@@ -363,11 +448,11 @@ def factor_policy_series(summaries, spec, policy_order=POLICY_ORDER):
 def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
     """Build one three-panel single-factor figure from summary rows."""
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import MaxNLocator, MultipleLocator
+    from matplotlib.ticker import FormatStrFormatter, MaxNLocator, MultipleLocator
 
     x_values = list(spec["x_values"])
     chinese_font = chinese_font_properties()
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), sharex=True)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.6), sharex=True)
     success_axis_values = []
     collision_axis_values = []
 
@@ -376,54 +461,76 @@ def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
     ):
         success_axis_values.extend(success_rates)
         collision_axis_values.extend(collision_rates)
+        success_percentages = [value * 100.0 for value in success_rates]
+        collision_percentages = [value * 100.0 for value in collision_rates]
         display_name = POLICY_DISPLAY_NAMES_ZH.get(policy, policy)
-        axes[0].plot(x_values, success_rates, marker="o", label=display_name)
-        axes[1].plot(x_values, collision_rates, marker="o", label=display_name)
-        axes[2].plot(x_values, flight_times, marker="o", label=display_name)
+        color = POLICY_COLORS.get(policy)
+        plot_kwargs = {
+            "marker": POLICY_MARKERS.get(policy, "o"),
+            "label": display_name,
+        }
+        if color is not None:
+            plot_kwargs["color"] = color
+        axes[0].plot(x_values, success_percentages, **plot_kwargs)
+        axes[1].plot(x_values, collision_percentages, **plot_kwargs)
+        axes[2].plot(x_values, flight_times, **plot_kwargs)
 
-    axes[0].set_ylim(*compact_proportion_limits(success_axis_values))
-    axes[0].yaxis.set_major_locator(MultipleLocator(0.04))
-    axes[1].set_ylim(*compact_proportion_limits(collision_axis_values, include_zero=True))
-    axes[1].yaxis.set_major_locator(MultipleLocator(0.04))
-    axes[2].yaxis.set_major_locator(MaxNLocator(nbins=5))
-    panel_labels = (
-        "成功率",
-        "碰撞率",
-        "成功飞行时间中位数（秒）",
+    percentage_tick_step = float(spec.get("percentage_tick_step", 10.0))
+    proportion_tick_step = percentage_tick_step / 100.0
+    success_limits = compact_proportion_limits(
+        success_axis_values, tick_step=proportion_tick_step
     )
-    for axis, panel_label in zip(axes, panel_labels):
+    collision_limits = compact_proportion_limits(
+        collision_axis_values,
+        include_zero=True,
+        tick_step=proportion_tick_step,
+    )
+    axes[0].set_ylim(*(value * 100.0 for value in success_limits))
+    axes[0].yaxis.set_major_locator(MultipleLocator(percentage_tick_step))
+    axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+    axes[1].set_ylim(*(value * 100.0 for value in collision_limits))
+    axes[1].yaxis.set_major_locator(MultipleLocator(percentage_tick_step))
+    axes[1].yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+    axes[2].yaxis.set_major_locator(MaxNLocator(nbins=5))
+    yaxis_labels = (
+        "成功率（%）",
+        "碰撞率（%）",
+        "飞行时间（秒）",
+    )
+    xaxis_label = spec.get("xaxis_label_zh", spec["xlabel_zh"])
+    for axis, yaxis_label in zip(axes, yaxis_labels):
         axis.set_xticks(x_values)
         axis.set_xticklabels(spec["tick_labels"])
+        axis.set_xlabel(xaxis_label, fontsize=PLOT_TEXT_SIZE, labelpad=8)
+        axis.set_ylabel(yaxis_label, fontsize=PLOT_TEXT_SIZE, labelpad=8)
+        axis.tick_params(axis="both", labelsize=PLOT_TICK_SIZE)
         axis.grid(True, alpha=0.3)
-        axis.text(
-            0.5,
-            -0.19,
-            panel_label,
-            ha="center",
-            va="top",
-            fontweight="semibold",
-            transform=axis.transAxes,
-        )
-    fig.suptitle(spec["xlabel_zh"], y=0.98)
+    fig.suptitle(
+        spec.get("title_zh", spec["xlabel_zh"]),
+        y=0.97,
+        fontsize=PLOT_TEXT_SIZE,
+        fontweight="semibold",
+    )
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles,
         labels,
         loc="lower center",
         ncol=len(labels),
-        bbox_to_anchor=(0.5, 0.015),
-        fontsize=12,
+        bbox_to_anchor=(0.5, 0.045),
+        fontsize=PLOT_TEXT_SIZE,
         markerscale=1.25,
         handlelength=2.3,
     )
     apply_font_properties([
         fig._suptitle,
-        *[text for axis in axes for text in axis.texts],
+        *[axis.xaxis.label for axis in axes],
+        *[axis.yaxis.label for axis in axes],
         *[text for axis in axes for text in axis.get_xticklabels()],
         *[text for axis in axes for text in axis.get_yticklabels()],
         *fig.legends[0].get_texts(),
     ], chinese_font)
-    fig.tight_layout(rect=(0.0, 0.12, 1.0, 0.93))
+    fig.tight_layout(rect=(0.0, 0.14, 1.0, 0.92), w_pad=1.8)
     return fig, axes
 
 
@@ -484,6 +591,13 @@ def write_summary_outputs(
         policy_order=policy_order,
         factor_specs=factor_specs,
     )
+    if factor_specs is FACTOR_SPECS:
+        plot_factor_sweeps(
+            summaries,
+            output,
+            policy_order=policy_order,
+            factor_specs=HIGH_SPEED_FACTOR_SPECS,
+        )
     return summaries, paired
 
 
@@ -497,19 +611,20 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
-    try:
-        result_paths = (
-            [Path(path) for path in args.results]
-            if args.results
-            else latest_policy_result_paths()
-        )
-    except FileNotFoundError as error:
-        parser.error(str(error))
     output = Path(args.output)
+    expected_case_ids = [row["case_id"] for row in read_csv(DEFAULT_CASES)]
+    try:
+        if args.results:
+            result_paths = [Path(path) for path in args.results]
+            rows = read_result_files(result_paths)
+        else:
+            rows, result_paths = latest_policy_result_rows(
+                ABLATION_RESULTS_ROOT, POLICY_ORDER, expected_case_ids
+            )
+    except (FileNotFoundError, ValueError) as error:
+        parser.error(str(error))
     for path in result_paths:
         print(f"[SUMMARY] source: {path}")
-    rows = read_result_files(result_paths)
-    expected_case_ids = [row["case_id"] for row in read_csv(DEFAULT_CASES)]
     try:
         validate_result_integrity(rows, expected_case_ids, POLICY_ORDER)
     except ValueError as error:

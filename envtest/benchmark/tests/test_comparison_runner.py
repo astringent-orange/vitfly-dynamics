@@ -36,28 +36,30 @@ class ComparisonRunnerTest(unittest.TestCase):
     def test_vitfly_maps_to_official_legacy_policy(self):
         self.assertEqual(resolve_policy(self.config, "vitfly"), ("original_vitfly", "vitfly"))
 
-    def test_unintegrated_planners_fail_before_rollout(self):
+    def test_planners_resolve_to_external_adapters(self):
         for model in ("fastplanner", "egoplanner"):
-            with self.assertRaisesRegex(ValueError, "is not integrated"):
-                resolve_policy(self.config, model)
+            source_policy, result_id = resolve_policy(self.config, model)
+            self.assertEqual(source_policy, model)
+            self.assertEqual(result_id, model)
 
     def test_planner_command_contract_is_validated(self):
         valid = validate_policy({
             "id": "planner",
             "adapter": "fastplanner_ros",
-            "enabled": False,
-            "command_topic": "/kingfisher/dodgeros_pilot/feedthrough_command",
-            "command_type": "dodgeros_msgs/Command",
-            "command_mode": 2,
+            "enabled": True,
+            "launch_command": "envtest/fastplanner/launch_controller.bash",
+            "command_topic": "/kingfisher/dodgeros_pilot/velocity_command",
+            "command_type": "geometry_msgs/TwistStamped",
             "command_frame": "world",
         })
-        self.assertFalse(valid["enabled"])
+        self.assertTrue(valid["enabled"])
         with self.assertRaisesRegex(ValueError, "world-frame"):
             validate_policy({
                 "id": "planner",
                 "adapter": "fastplanner_ros",
-                "enabled": False,
-                "command_mode": 1,
+                "enabled": True,
+                "launch_command": "envtest/fastplanner/launch_controller.bash",
+                "command_type": "dodgeros_msgs/Command",
             })
 
     def test_default_output_uses_comparison_directory(self):

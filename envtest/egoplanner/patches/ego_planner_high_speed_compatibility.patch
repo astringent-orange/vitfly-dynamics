@@ -1,0 +1,17 @@
+diff --git a/src/planner/plan_manage/src/planner_manager.cpp b/src/planner/plan_manage/src/planner_manager.cpp
+--- a/src/planner/plan_manage/src/planner_manager.cpp
++++ b/src/planner/plan_manage/src/planner_manager.cpp
+@@ -83,1 +83,2 @@
+-        double time = pow(pp_.max_vel_, 2) / pp_.max_acc_ > dist ? sqrt(dist / pp_.max_acc_) : (dist - pow(pp_.max_vel_, 2) / pp_.max_acc_) / pp_.max_vel_ + 2 * pp_.max_vel_ / pp_.max_acc_;
++        // A triangular acceleration profile contains both acceleration and deceleration phases.
++        double time = pow(pp_.max_vel_, 2) / pp_.max_acc_ > dist ? 2.0 * sqrt(dist / pp_.max_acc_) : (dist - pow(pp_.max_vel_, 2) / pp_.max_acc_) / pp_.max_vel_ + 2 * pp_.max_vel_ / pp_.max_acc_;
+diff --git a/src/planner/plan_manage/src/ego_replan_fsm.cpp b/src/planner/plan_manage/src/ego_replan_fsm.cpp
+--- a/src/planner/plan_manage/src/ego_replan_fsm.cpp
++++ b/src/planner/plan_manage/src/ego_replan_fsm.cpp
+@@ -550,1 +550,4 @@
+-      local_target_vel_ = planner_manager_->global_data_.getVelocity(t);
++      local_target_vel_ = planner_manager_->global_data_.getVelocity(t);
++      const double remaining_distance = (end_pt_ - local_target_pt_).norm();
++      const double reachable_speed = sqrt(max(0.0, 2.0 * planner_manager_->pp_.max_acc_ * remaining_distance));
++      if (local_target_vel_.norm() > reachable_speed && local_target_vel_.norm() > 1e-6)
++        local_target_vel_ *= reachable_speed / local_target_vel_.norm();

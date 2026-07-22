@@ -1,0 +1,6 @@
+diff --git a/src/planner/plan_manage/src/ego_replan_fsm.cpp b/src/planner/plan_manage/src/ego_replan_fsm.cpp
+--- a/src/planner/plan_manage/src/ego_replan_fsm.cpp
++++ b/src/planner/plan_manage/src/ego_replan_fsm.cpp
+@@ -119,1 +119,1 @@
+-    end_pt_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, 1.0;
++    end_pt_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, msg->poses[0].pose.position.z;

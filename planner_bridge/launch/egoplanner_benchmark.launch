@@ -1,0 +1,57 @@
+<launch>
+  <arg name="desired_speed" default="5.0"/>
+  <arg name="max_acc" default="3.0"/>
+  <arg name="planning_horizon" default="7.5"/>
+  <arg name="control_points_distance" default="0.5"/>
+  <arg name="command_topic" default="/egoplanner/position_cmd"/>
+  <arg name="start_bridge" default="true"/>
+
+  <include file="$(find ego_planner)/launch/advanced_param.xml">
+    <arg name="map_size_x_" value="140.0"/>
+    <arg name="map_size_y_" value="30.0"/>
+    <arg name="map_size_z_" value="10.0"/>
+    <arg name="odometry_topic" value="/kingfisher/dodgeros_pilot/groundtruth/odometry"/>
+    <arg name="camera_pose_topic" value="/egoplanner/camera_pose"/>
+    <arg name="depth_topic" value="/egoplanner/depth"/>
+    <arg name="cloud_topic" value="/egoplanner/cloud"/>
+    <arg name="cx" value="320.0"/>
+    <arg name="cy" value="240.0"/>
+    <arg name="fx" value="255.02"/>
+    <arg name="fy" value="255.02"/>
+    <arg name="max_vel" value="$(arg desired_speed)"/>
+    <arg name="max_acc" value="$(arg max_acc)"/>
+    <arg name="planning_horizon" value="$(arg planning_horizon)"/>
+    <arg name="point_num" value="1"/>
+    <arg name="point0_x" value="60.0"/>
+    <arg name="point0_y" value="0.0"/>
+    <arg name="point0_z" value="3.0"/>
+    <arg name="point1_x" value="60.0"/>
+    <arg name="point1_y" value="0.0"/>
+    <arg name="point1_z" value="3.0"/>
+    <arg name="point2_x" value="60.0"/>
+    <arg name="point2_y" value="0.0"/>
+    <arg name="point2_z" value="3.0"/>
+    <arg name="point3_x" value="60.0"/>
+    <arg name="point3_y" value="0.0"/>
+    <arg name="point3_z" value="3.0"/>
+    <arg name="point4_x" value="60.0"/>
+    <arg name="point4_y" value="0.0"/>
+    <arg name="point4_z" value="3.0"/>
+    <arg name="flight_type" value="1"/>
+  </include>
+
+  <node pkg="ego_planner" name="ego_traj_server" type="traj_server" output="screen">
+    <remap from="/position_cmd" to="$(arg command_topic)"/>
+    <remap from="/odom_world" to="/kingfisher/dodgeros_pilot/groundtruth/odometry"/>
+    <param name="traj_server/time_forward" value="1.0" type="double"/>
+  </node>
+
+  <group if="$(arg start_bridge)">
+    <node pkg="vitfly_planner_bridge" name="egoplanner_bridge" type="planner_bridge.py" args="--planner egoplanner --desired-speed $(arg desired_speed)" output="screen">
+      <param name="command_topic" value="$(arg command_topic)"/>
+      <param name="ready_topic" value="/egoplanner/ready"/>
+      <param name="depth_output_topic" value="/egoplanner/depth"/>
+      <param name="pose_output_topic" value="/egoplanner/camera_pose"/>
+    </node>
+  </group>
+</launch>

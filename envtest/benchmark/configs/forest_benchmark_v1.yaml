@@ -29,22 +29,30 @@ policies:
     frame_offset: 0
   - id: fastplanner
     adapter: fastplanner_ros
-    enabled: false
-    launch_command:
-    ready_topic:
-    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
-    command_type: dodgeros_msgs/Command
-    command_mode: 2
+    enabled: true
+    launch_command: envtest/fastplanner/launch_controller.bash
+    ready_topic: /fastplanner/ready
+    command_topic: /kingfisher/dodgeros_pilot/velocity_command
+    command_type: geometry_msgs/TwistStamped
     command_frame: world
+    upstream_commit: 41be219fe4ecc43bf0e0c2b42a523f8755ccc0bd
+    workspace_env: VITFLY_FASTPLANNER_WORKSPACE
+    patches:
+      - envtest/fastplanner/patches/fast_planner_nlopt_prefix.patch
+      - envtest/fastplanner/patches/fast_planner_goal_height.patch
   - id: egoplanner
     adapter: egoplanner_ros
-    enabled: false
-    launch_command:
-    ready_topic:
-    command_topic: /kingfisher/dodgeros_pilot/feedthrough_command
-    command_type: dodgeros_msgs/Command
-    command_mode: 2
+    enabled: true
+    launch_command: envtest/egoplanner/launch_controller.bash
+    ready_topic: /egoplanner/ready
+    command_topic: /kingfisher/dodgeros_pilot/velocity_command
+    command_type: geometry_msgs/TwistStamped
     command_frame: world
+    upstream_commit: bfda51284c8c1b476043255a8145ef925a3778a5
+    workspace_env: VITFLY_EGOPLANNER_WORKSPACE
+    patches:
+      - envtest/egoplanner/patches/ego_planner_goal_height.patch
+      - envtest/egoplanner/patches/ego_planner_high_speed_compatibility.patch
 
 scenario:
   map_ids:

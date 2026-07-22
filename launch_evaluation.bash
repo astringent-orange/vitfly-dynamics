@@ -34,6 +34,9 @@ real_time_factor="${VITFLY_REAL_TIME_FACTOR:-}"
 reuse_simulator="${VITFLY_REUSE_SIMULATOR:-0}"
 simulator_session_id="${VITFLY_SIMULATOR_SESSION_ID:-}"
 python_bin="${VITFLY_PYTHON:-python3}"
+planner_adapter="${VITFLY_PLANNER_ADAPTER:-}"
+planner_launch="${VITFLY_PLANNER_LAUNCH:-}"
+planner_ready_topic="${VITFLY_PLANNER_READY_TOPIC:-}"
 
 for arg in "${@:3}"
 do
@@ -116,6 +119,15 @@ export VITFLY_POLICY_CONFIG="$policy_config"
 export VITFLY_CASE_CONFIG="$case_config"
 export VITFLY_EVALUATION_PROFILE="$evaluation_profile"
 export VITFLY_EVALUATION_PATH="$result_path"
+
+if [ -n "$planner_adapter" ] && [ "$benchmark_mode" != "1" ]; then
+  echo "[LAUNCH SCRIPT] planner adapters are only supported in benchmark mode."
+  exit 1
+fi
+if [ -n "$planner_adapter" ] && [ -z "$planner_launch" ]; then
+  echo "[LAUNCH SCRIPT] planner adapter requires VITFLY_PLANNER_LAUNCH."
+  exit 3
+fi
 
 if ! [[ "$env_count" =~ ^[1-9][0-9]*$ ]]
 then
@@ -235,6 +247,27 @@ wait_for_topic() {
     sleep 1
   done
   return 0
+}
+
+wait_for_planner_ready() {
+  [ -z "$planner_ready_topic" ] && return 0
+  timeout_s="${1:-45}"
+  start_wait=$(date +%s)
+  while ((($(date +%s) - start_wait) < timeout_s))
+  do
+    if ! ps -p "$COMP_PID" >/dev/null 2>&1
+    then
+      return 1
+    fi
+    if timeout 2 rostopic echo -n 1 "$planner_ready_topic" 2>/dev/null | grep -Eiq 'data:[[:space:]]*(true|1)'
+    then
+      benchmark_stage planner_ready
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[LAUNCH SCRIPT] ERROR: Timed out waiting for planner ready topic $planner_ready_topic"
+  return 1
 }
 
 wait_for_sim_topics() {
@@ -719,8 +752,14 @@ do
   "$python_bin" evaluation_node.py ${datetime}_N$i &
   PY_PID="$!"
 
-  "$python_bin" run_competition.py $run_competition_args --des_vel "$des_vel" \
-    --offset "$offset" --model_path "$model_path" &
+  if [ -n "$planner_adapter" ]
+  then
+    echo "[LAUNCH_EVALUATION] Starting planner adapter $planner_adapter"
+    "$planner_launch" &
+  else
+    "$python_bin" run_competition.py $run_competition_args --des_vel "$des_vel" \
+      --offset "$offset" --model_path "$model_path" &
+  fi
   COMP_PID="$!"
   cd -
 
@@ -729,7 +768,13 @@ do
     echo
     echo [LAUNCH_EVALUATION] Sending start navigation command
     echo
-    if ! publish_empty_control /kingfisher/start_navigation 2 30
+    if ! wait_for_planner_ready 45
+    then
+      echo "[LAUNCH_EVALUATION] Planner did not become ready."
+      batch_infrastructure_failed=1
+      stop_evaluator
+      write_rollout_failure_summary simulator_error
+    elif ! publish_empty_control /kingfisher/start_navigation 2 30
     then
       if ! ps -p "$COMP_PID" > /dev/null
       then

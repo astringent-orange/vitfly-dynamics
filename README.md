@@ -349,7 +349,7 @@ python3 envtest/benchmark/run_comparison.py --policy adjacent
 python3 envtest/benchmark/run_comparison.py --policy vitfly
 ```
 
-规划器接入后分别运行：
+FastPlanner 和 EGO-Planner 分别运行：
 
 ```bash
 python3 envtest/benchmark/run_comparison.py --policy fastplanner
@@ -388,7 +388,42 @@ comparison_flight_speed.png
 
 #### FastPlanner/EGO-Planner接入接口
 
-当前配置已保留 `fastplanner_ros` 和 `egoplanner_ros`，但默认 `enabled: false`。未接入时运行对应命令会在启动仿真前明确报错，不会生成无效实验结果。
+当前配置已接入 `fastplanner_ros` 和 `egoplanner_ros`。两个规划器源码放在主仓库外的独立 catkin overlay，避免将大型第三方源码和构建产物提交到本仓库。
+
+固定版本为：
+
+```text
+FastPlanner  41be219fe4ecc43bf0e0c2b42a523f8755ccc0bd
+EGO-Planner  bfda51284c8c1b476043255a8145ef925a3778a5
+NLopt        09b3c2a6da71cabcb98d2c8facc6b83d2321ed71
+```
+
+默认路径是主工作空间的兄弟目录，也可以显式设置：
+
+```bash
+export VITFLY_FASTPLANNER_WORKSPACE=/absolute/path/to/fastplanner_ws
+export VITFLY_EGOPLANNER_WORKSPACE=/absolute/path/to/egoplanner_ws
+```
+
+分别构建：
+
+```bash
+bash envtest/fastplanner/build_fastplanner.bash
+bash envtest/egoplanner/build_egoplanner.bash
+```
+
+构建脚本会固定上游 commit、应用目标高度和 EGO 高速兼容补丁，并将本地
+`planner_bridge` 链接到对应 overlay。EGO 高速补丁会在实验记录中保留，正式报告中需要披露。
+
+构建后先运行审计：
+
+```bash
+python3 envtest/benchmark/preflight.py \
+  --cases envtest/benchmark/manifests/comparison_test_cases.csv \
+  --policy fastplanner --policy egoplanner
+```
+
+只有输出 `ready: true` 才开始长实验。
 
 两个规划器必须满足相同的生命周期接口：
 
@@ -400,24 +435,34 @@ stop()
 metadata()
 ```
 
-规划器可以在adapter内部订阅自己的里程计、深度图、点云或地图消息，也可以输出原生轨迹；但送入仿真控制器前必须转换为统一命令：
+当前的 `planner_bridge` 负责订阅本地深度图和 ground-truth odometry，发布目标路径，接收上游 `quadrotor_msgs/PositionCommand`，并转换为本地控制接口：
 
 ```text
-topic: /kingfisher/dodgeros_pilot/feedthrough_command
-type: dodgeros_msgs/Command
-mode: 2
-velocity frame: world
-velocity: [vx, vy, vz]
+input:  /kingfisher/dodgeros_pilot/unity/depth
+input:  /kingfisher/dodgeros_pilot/groundtruth/odometry
+input:  quadrotor_msgs/PositionCommand
+output: /kingfisher/dodgeros_pilot/velocity_command
+type:   geometry_msgs/TwistStamped
+frame:  world
 ```
 
 接入步骤：
 
-1. 下载并在同一catkin工作空间编译规划器及其依赖。
-2. 编写ROS bridge，向规划器提供当前case的地图、目标点、期望速度和状态输入。
-3. 在bridge中将规划器轨迹或控制量转换为上述world-frame LINVEL命令。
-4. 在 `forest_benchmark_v1.yaml` 中填写 `launch_command`、`ready_topic`，并将 `enabled` 改为 `true`。
-5. 在 `policy_adapters.py` 中实现对应规划器的启动、ready等待、进程监控和停止逻辑。
-6. 先验证进程退出会记录为 `controller_error`，再完成单case测试，最后运行400轮正式测试。
+1. 分别构建两个外部 planner overlay。
+2. 确认 `planner_bridge` 能收到深度图和 odometry，并发布 ready。
+3. 先运行一个 case：
+
+   ```bash
+   python3 envtest/benchmark/run_comparison.py \
+     --policy fastplanner --limit 1 \
+     --output results/comparison/fastplanner_smoke
+   ```
+
+4. EGO-Planner 使用相同命令，将 `--policy` 改为 `egoplanner`。
+5. 确认 `results.csv` 中没有 `simulator_error`、`runner_timeout` 或 `missing_result`，再运行正式400轮。
+
+Benchmark 下规划器最终都通过 `/kingfisher/dodgeros_pilot/velocity_command` 接入；指南中使用的
+`feedthrough_command/dodgeros_msgs::Command` 不适用于当前本地飞控接口。
 
 所有规划器使用同一独立evaluator，指标仍为成功率、碰撞率、成功飞行时间、95%成功率CI、paired model difference和结构化失败原因。规划器内部报告的“成功”不能替代Benchmark evaluator的判定。
 

@@ -1,0 +1,15 @@
+diff --git a/fast_planner/bspline_opt/CMakeLists.txt b/fast_planner/bspline_opt/CMakeLists.txt
+--- a/fast_planner/bspline_opt/CMakeLists.txt
++++ b/fast_planner/bspline_opt/CMakeLists.txt
+@@ -12,2 +12,9 @@
+-set(NLOPT_INCLUDE_DIR "/usr/local/include")
+-set(NLOPT_LIBRARY "/usr/local/lib/libnlopt.so")
++set(VITFLY_NLOPT_PREFIX "$ENV{VITFLY_NLOPT_PREFIX}" CACHE PATH "Pinned NLopt prefix")
++if (NOT VITFLY_NLOPT_PREFIX)
++  message(FATAL_ERROR "VITFLY_NLOPT_PREFIX must point to the pinned NLopt installation")
++endif()
++find_path(NLOPT_INCLUDE_DIR nlopt.hpp PATHS "${VITFLY_NLOPT_PREFIX}/include" NO_DEFAULT_PATH)
++find_library(NLOPT_LIBRARY NAMES nlopt PATHS "${VITFLY_NLOPT_PREFIX}/lib" NO_DEFAULT_PATH)
++if (NOT NLOPT_INCLUDE_DIR OR NOT NLOPT_LIBRARY)
++  message(FATAL_ERROR "Pinned NLopt was not found under ${VITFLY_NLOPT_PREFIX}")
++endif()

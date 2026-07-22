@@ -468,9 +468,11 @@ def run_attempt(
     evaluation_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__evaluation.yaml"
     attempt_log = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__attempt_{attempt}.log"
     diagnostics_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__attempt_{attempt}__controller.json"
+    planner_log_path = output / "rollout_logs" / f"{policy['id']}__{case['case_id']}__attempt_{attempt}__planner.log"
     evaluation_path.parent.mkdir(parents=True, exist_ok=True)
     evaluation_path.unlink(missing_ok=True)
     diagnostics_path.unlink(missing_ok=True)
+    planner_log_path.unlink(missing_ok=True)
     env = os.environ.copy()
     env.update(policy_environment(policy))
     env.update({
@@ -503,6 +505,7 @@ def run_attempt(
         "VITFLY_SIMULATOR_SESSION_ID": simulator_session or "",
         "VITFLY_SESSION_CASE_INDEX": str(session_case_index),
         "VITFLY_PYTHON": os.environ.get("VITFLY_PYTHON", sys.executable),
+        "VITFLY_PLANNER_LOG": str(planner_log_path.resolve()),
     })
     launch_args = "bash launch_evaluation.bash 1 vision fixed_env benchmark_mode"
     if reuse_simulator:

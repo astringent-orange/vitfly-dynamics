@@ -205,6 +205,15 @@ class EvaluationLifecycleTest(unittest.TestCase):
         publish_guard = source.rfind("if not self.benchmark_mode:", 0, debug_publish)
         self.assertGreater(publish_guard, source.index("def img_callback"))
 
+    def test_planner_adapter_waits_ready_before_navigation(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        planner_start = source.index('"$planner_launch" &')
+        ready_wait = source.index("wait_for_planner_ready 45", planner_start)
+        start_publish = source.index("publish_empty_control /kingfisher/start_navigation 2 30", ready_wait)
+        self.assertLess(planner_start, ready_wait)
+        self.assertLess(ready_wait, start_publish)
+        self.assertIn("VITFLY_PLANNER_READY_TOPIC", source)
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)

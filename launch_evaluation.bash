@@ -41,6 +41,8 @@ planner_launch="${VITFLY_PLANNER_LAUNCH:-}"
 planner_ready_topic="${VITFLY_PLANNER_READY_TOPIC:-}"
 rollout_timing="${VITFLY_ROLLOUT_TIMING:-0}"
 rollout_timing_log="${VITFLY_ROLLOUT_TIMING_LOG:-}"
+ros_sigint_timeout="${VITFLY_ROS_SIGINT_TIMEOUT:-3}"
+ros_sigterm_timeout="${VITFLY_ROS_SIGTERM_TIMEOUT:-1}"
 
 for arg in "${@:3}"
 do
@@ -525,7 +527,9 @@ launch_simulator() {
     wait_for_process_exit visionsim_node 10
   fi
 
-  roslaunch envsim visionenv_sim.launch render:=True gui:=False \
+  roslaunch --sigint-timeout="$ros_sigint_timeout" \
+    --sigterm-timeout="$ros_sigterm_timeout" \
+    envsim visionenv_sim.launch render:=True gui:=False \
     rviz:=$rviz_enabled publish_rgb:=$publish_rgb \
     publish_optical_flow:=$publish_optical_flow $realtimefactor &
   ROS_PID="$!"
@@ -552,13 +556,13 @@ stop_simulator() {
   if [ -n "$ROS_PID" ] && kill -0 "$ROS_PID" 2>/dev/null
   then
     kill -SIGINT "$ROS_PID"
-    if ! wait_for_pid_exit "$ROS_PID" 15
+    if ! wait_for_pid_exit "$ROS_PID" 6
     then
       kill -SIGTERM "$ROS_PID" 2>/dev/null
-      if ! wait_for_pid_exit "$ROS_PID" 5
+      if ! wait_for_pid_exit "$ROS_PID" 2
       then
         kill -SIGKILL "$ROS_PID" 2>/dev/null
-        wait_for_pid_exit "$ROS_PID" 5
+        wait_for_pid_exit "$ROS_PID" 2
       fi
     fi
   fi
@@ -571,17 +575,17 @@ force_stop_simulator() {
   then
     echo "[LAUNCH SCRIPT] Cleaning residual simulator processes."
     signal_simulator_stack INT
-    wait_for_simulator_shutdown 15
+    wait_for_simulator_shutdown 5
   fi
   if simulator_stack_running || ros_master_ready
   then
     signal_simulator_stack TERM
-    wait_for_simulator_shutdown 5
+    wait_for_simulator_shutdown 2
   fi
   if simulator_stack_running || ros_master_ready
   then
     signal_simulator_stack KILL
-    wait_for_simulator_shutdown 5
+    wait_for_simulator_shutdown 2
   fi
   if simulator_stack_running || ros_master_ready
   then

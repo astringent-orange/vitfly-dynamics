@@ -258,6 +258,17 @@ class EvaluationLifecycleTest(unittest.TestCase):
         ):
             self.assertIn(f'record_rollout_timing "$i" {stage}', source)
 
+    def test_launcher_uses_short_configurable_roslaunch_shutdown_timeouts(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn('VITFLY_ROS_SIGINT_TIMEOUT:-3', source)
+        self.assertIn('VITFLY_ROS_SIGTERM_TIMEOUT:-1', source)
+        self.assertIn('--sigint-timeout="$ros_sigint_timeout"', source)
+        self.assertIn('--sigterm-timeout="$ros_sigterm_timeout"', source)
+        self.assertIn('wait_for_pid_exit "$ROS_PID" 6', source)
+        self.assertIn('wait_for_pid_exit "$ROS_PID" 2', source)
+        self.assertIn("wait_for_simulator_shutdown 5", source)
+        self.assertIn("wait_for_simulator_shutdown 2", source)
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)

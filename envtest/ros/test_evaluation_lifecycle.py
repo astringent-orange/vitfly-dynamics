@@ -247,6 +247,17 @@ class EvaluationLifecycleTest(unittest.TestCase):
         self.assertIn("wait_for_message /kingfisher/dodgeros_pilot/state 45", source)
         self.assertNotIn("sleep 5\n  wait_for_sim_topics", source)
 
+    def test_launcher_records_rollout_stage_timings(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn("VITFLY_ROLLOUT_TIMING", source)
+        self.assertIn("VITFLY_ROLLOUT_TIMING_LOG", source)
+        for stage in (
+            "prelaunch_cleanup", "simulator_startup", "pilot_prepare",
+            "controller_startup", "navigation", "controller_cleanup",
+            "simulator_shutdown", "rollout_total",
+        ):
+            self.assertIn(f'record_rollout_timing "$i" {stage}', source)
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)

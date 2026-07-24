@@ -39,6 +39,8 @@ python_bin="${VITFLY_PYTHON:-python3}"
 planner_adapter="${VITFLY_PLANNER_ADAPTER:-}"
 planner_launch="${VITFLY_PLANNER_LAUNCH:-}"
 planner_ready_topic="${VITFLY_PLANNER_READY_TOPIC:-}"
+rollout_timing="${VITFLY_ROLLOUT_TIMING:-0}"
+rollout_timing_log="${VITFLY_ROLLOUT_TIMING_LOG:-}"
 
 for arg in "${@:3}"
 do
@@ -143,6 +145,16 @@ export VITFLY_POLICY_CONFIG="$policy_config"
 export VITFLY_CASE_CONFIG="$case_config"
 export VITFLY_EVALUATION_PROFILE="$evaluation_profile"
 export VITFLY_EVALUATION_PATH="$result_path"
+
+if [ -n "$rollout_timing_log" ] && [[ "$rollout_timing_log" != /* ]]
+then
+  rollout_timing_log="$PWD/$rollout_timing_log"
+fi
+if [ "$rollout_timing" = "1" ] && [ -n "$rollout_timing_log" ]
+then
+  mkdir -p "$(dirname "$rollout_timing_log")"
+  printf 'rollout,stage,duration_ms,env_folder,phase_seed\n' > "$rollout_timing_log"
+fi
 
 if [ -n "$planner_adapter" ] && [ "$benchmark_mode" != "1" ]; then
   echo "[LAUNCH SCRIPT] planner adapters are only supported in benchmark mode."
@@ -301,6 +313,31 @@ wait_for_message() {
   topic_name="$1"
   timeout_s="${2:-45}"
   timeout "$timeout_s" rostopic echo -n 1 "$topic_name" >/dev/null 2>&1
+}
+
+wall_time_ms() {
+  date +%s%3N
+}
+
+record_rollout_timing() {
+  if [ "$rollout_timing" != "1" ]
+  then
+    return
+  fi
+  timing_rollout="$1"
+  timing_stage="$2"
+  timing_started_ms="$3"
+  timing_finished_ms=$(wall_time_ms)
+  timing_duration_ms=$((timing_finished_ms - timing_started_ms))
+  timing_line="[ROLLOUT_TIMING] rollout=$timing_rollout stage=$timing_stage duration_ms=$timing_duration_ms env=${VITFLY_ENV_FOLDER:-unknown} phase_seed=${VITFLY_DYNAMIC_PHASE_SEED:-unknown}"
+  echo "$timing_line"
+  if [ -n "$rollout_timing_log" ]
+  then
+    printf '%s,%s,%s,%s,%s\n' \
+      "$timing_rollout" "$timing_stage" "$timing_duration_ms" \
+      "${VITFLY_ENV_FOLDER:-unknown}" "${VITFLY_DYNAMIC_PHASE_SEED:-unknown}" \
+      >> "$rollout_timing_log"
+  fi
 }
 
 wait_for_planner_ready() {
@@ -791,6 +828,7 @@ simulator_needs_cleanup=1
 
 for i in $(eval echo {1..$N})
 do
+  rollout_wall_started_ms=$(wall_time_ms)
   if ((random_env))
   then
     env_id=$(( (i - 1) % env_count ))
@@ -800,12 +838,16 @@ do
     export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((phase_seed_base + i - 1))}"
     echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED phase_seed=$VITFLY_DYNAMIC_PHASE_SEED"
     ensure_environment_exists || simulator_error_exit
+    stage_started_ms=$(wall_time_ms)
     if ((simulator_needs_cleanup))
     then
       force_stop_simulator || simulator_error_exit
       simulator_needs_cleanup=0
     fi
+    record_rollout_timing "$i" prelaunch_cleanup "$stage_started_ms"
+    stage_started_ms=$(wall_time_ms)
     launch_simulator || simulator_error_exit
+    record_rollout_timing "$i" simulator_startup "$stage_started_ms"
   fi
 
   # Reset the simulator if needed
@@ -830,17 +872,20 @@ do
 
   fi
 
+  stage_started_ms=$(wall_time_ms)
   if ! prepare_pilot_for_rollout
   then
     echo "[LAUNCH SCRIPT] ERROR: Pilot never reached hover for rollout $i; no trajectory was created."
     simulator_error_exit
   fi
+  record_rollout_timing "$i" pilot_prepare "$stage_started_ms"
 
   export ROLLOUT_NAME="rollout_""$i"
   echo "$ROLLOUT_NAME"
 
   rm -f ./envtest/ros/summary.yaml ./envtest/ros/.summary.yaml.tmp
   benchmark_stage controller_start
+  stage_started_ms=$(wall_time_ms)
   cd ./envtest/ros/
   "$python_bin" evaluation_node.py ${datetime}_N$i &
   PY_PID="$!"
@@ -899,6 +944,9 @@ do
   then
     break
   fi
+
+  record_rollout_timing "$i" controller_startup "$stage_started_ms"
+  navigation_started_ms=$(wall_time_ms)
 
   start_time=$(date +%s)
   # Wait until the evaluation script has finished
@@ -975,9 +1023,13 @@ do
   cat "$SUMMARY_FILE" "./envtest/ros/summary.yaml" > "tmp.yaml"
   mv "tmp.yaml" "$SUMMARY_FILE"
   benchmark_stage rollout_finished
+  record_rollout_timing "$i" navigation "$navigation_started_ms"
 
   benchmark_stage cleanup_start
+  stage_started_ms=$(wall_time_ms)
   stop_controller
+  record_rollout_timing "$i" controller_cleanup "$stage_started_ms"
+  stage_started_ms=$(wall_time_ms)
   if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     force_stop_simulator || batch_infrastructure_failed=1
@@ -991,7 +1043,9 @@ do
       simulator_needs_cleanup=0
     fi
   fi
+  record_rollout_timing "$i" simulator_shutdown "$stage_started_ms"
   benchmark_stage cleanup_finished
+  record_rollout_timing "$i" rollout_total "$rollout_wall_started_ms"
 
   if ((batch_infrastructure_failed))
   then

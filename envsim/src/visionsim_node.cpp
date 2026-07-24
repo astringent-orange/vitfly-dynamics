@@ -89,8 +89,10 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
 }
 
 VisionSim::~VisionSim() {
+  stop_requested_.store(true);
   if (sim_thread_.joinable()) sim_thread_.join();
   if (render_thread_.joinable()) render_thread_.join();
+  if (render_ && vision_env_ptr_) vision_env_ptr_->disconnectUnity();
 }
 
 bool VisionSim::resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases) {
@@ -168,7 +170,7 @@ bool VisionSim::resetDynamicPhasesCallback(std_srvs::Trigger::Request& request,
 }
 
 void VisionSim::simLoop() {
-  while (ros::ok()) {
+  while (ros::ok() && !stop_requested_.load()) {
     ros::WallTime t_start_sim = ros::WallTime::now();
     QuadState quad_state;
     Scalar sim_time = 0.0;
@@ -342,7 +344,14 @@ void VisionSim::publishImages(const QuadState &state) {
   unity_quad->setState(unity_quad_state);
 
 
-  vision_env_ptr_->updateUnity(frame_id_);
+  const flightlib::FrameID received_frame_id =
+    vision_env_ptr_->updateUnity(frame_id_);
+  if (received_frame_id != frame_id_) {
+    ROS_WARN_THROTTLE(1.0,
+                      "Unity frame %llu timed out; skipping stale image data",
+                      static_cast<unsigned long long>(frame_id_));
+    return;
+  }
 
   // Unity always returns a base RGB layer, but benchmark mode avoids copying,
   // converting and publishing layers that the controller does not consume.

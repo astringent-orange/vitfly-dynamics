@@ -1,5 +1,7 @@
 #include "flightlib/bridges/unity_bridge.hpp"
 
+#include <chrono>
+
 #include <gtest/gtest.h>
 
 #include "flightlib/common/logger.hpp"
@@ -23,6 +25,17 @@ TEST(UnityBridge, Constructor) {
   EXPECT_TRUE(unity_ready);
   // timeout flightmare
   usleep(5 * 1e6);
+}
+
+TEST(UnityBridge, HandleOutputTimesOutWithoutUnityResponse) {
+  UnityBridge unity_bridge;
+  const auto start = std::chrono::steady_clock::now();
+
+  EXPECT_EQ(0u, unity_bridge.handleOutput(1));
+
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - start);
+  EXPECT_LT(elapsed.count(), 500);
 }
 
 TEST(UnityBridge, PointCloud) {

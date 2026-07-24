@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <atomic>
 #include <memory>
 
 // -- ros
@@ -93,6 +94,7 @@ class VisionSim {
 
   std::mutex sim_mutex_;
   std::mutex dynamic_objects_mutex_;
+  std::atomic<bool> stop_requested_{false};
   std::thread sim_thread_;
   std::thread render_thread_;
 };

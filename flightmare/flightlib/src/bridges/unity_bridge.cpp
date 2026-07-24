@@ -23,10 +23,13 @@ bool UnityBridge::initializeConnections() {
 
   // create and bind an upload socket
   pub_.set(zmqpp::socket_option::send_high_water_mark, 6);
+  pub_.set(zmqpp::socket_option::linger, 0);
   pub_.bind(client_address_ + ":" + pub_port_);
 
   // create and bind a download_socket
   sub_.set(zmqpp::socket_option::receive_high_water_mark, 6);
+  sub_.set(zmqpp::socket_option::receive_timeout, 200);
+  sub_.set(zmqpp::socket_option::linger, 0);
   sub_.bind(client_address_ + ":" + sub_port_);
 
   // subscribe all messages from ZMQ
@@ -243,7 +246,11 @@ FrameID UnityBridge::handleOutput(const FrameID sent_frame_id) {
   for (int i = 0; i < max_output_request_; i++) {
     //   // create new message object zmqpp::message msg;
     //   std::cout << "receiving messages" << std::endl;
-    sub_.receive(msg);
+    if (!sub_.receive(msg)) {
+      logger_.warn("Timed out waiting for Unity frame %llu.",
+                   static_cast<unsigned long long>(sent_frame_id));
+      return 0;
+    }
 
     // unpack message metadata
     std::string json_sub_msg = msg.get(0);

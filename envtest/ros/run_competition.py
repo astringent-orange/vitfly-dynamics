@@ -435,7 +435,7 @@ class AgilePilotNode:
             return
         if self.folder is not None:
             return
-        base_folder = "train_set"
+        base_folder = os.environ.get("VITFLY_DATASET_DIR", "train_set")
         os.makedirs(base_folder, exist_ok=True)
         while True:
             candidate = opj(base_folder, str(int(time.time() * 100)))

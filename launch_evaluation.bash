@@ -32,6 +32,7 @@ evaluation_profile="${VITFLY_EVALUATION_PROFILE:-strict}"
 result_path="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
 real_time_factor="${VITFLY_REAL_TIME_FACTOR:-}"
 state_expert="${VITFLY_STATE_EXPERT:-astar_dynamic}"
+dataset_dir="${VITFLY_DATASET_DIR:-./envtest/ros/train_set}"
 reuse_simulator="${VITFLY_REUSE_SIMULATOR:-0}"
 simulator_session_id="${VITFLY_SIMULATOR_SESSION_ID:-}"
 python_bin="${VITFLY_PYTHON:-python3}"
@@ -116,6 +117,11 @@ case "$state_expert" in
     ;;
 esac
 export VITFLY_STATE_EXPERT="$state_expert"
+if [[ "$dataset_dir" != /* ]]
+then
+  dataset_dir="$PWD/$dataset_dir"
+fi
+export VITFLY_DATASET_DIR="$dataset_dir"
 
 if [ "$benchmark_mode" = "1" ]
 then
@@ -963,6 +969,6 @@ fi
 if [ "$2" = "state" ]
 then
   echo "[LAUNCH SCRIPT] Curating the completed state-collection batch."
-  "$python_bin" ./envtest/ros/curate_dataset.py ./envtest/ros/train_set \
+  "$python_bin" ./envtest/ros/curate_dataset.py "$dataset_dir" \
     --evaluation "$SUMMARY_FILE" --latest "$N" --apply || exit 1
 fi

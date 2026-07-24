@@ -28,10 +28,12 @@ bash launch_evaluation.bash 101 state phase_seed_base=1606
 
 ```bash
 VITFLY_REAL_TIME_FACTOR=10 \
+VITFLY_DATASET_DIR=./envtest/ros/train_set/vitfly_original_phase1505 \
+VITFLY_EVALUATION_PATH=./envtest/ros/train_set/vitfly_original_phase1505_evaluation.yaml \
 bash launch_evaluation.bash 101 state expert=vitfly phase_seed_base=1505
 ```
 
-该模式使用仓库原始的 `compute_command_state_based()` `method_id=1` 网格航点策略，不使用本实验的 A* 路径和候选速度规划。`phase_seed_base=1505` 会与此前 `1505..1605` 批次使用相同的环境轮换和相位种子：rollout 1 对应 `environment_0/1505`，rollout 101 对应 `environment_100/1605`。当前相位重置服务在导航前执行，因此同一 seed 在本次系统中会得到可复现的导航起始相位。
+该模式使用仓库原始的 `compute_command_state_based()` `method_id=1` 网格航点策略，不使用本实验的 A* 路径和候选速度规划。`phase_seed_base=1505` 会与此前 `1505..1605` 批次使用相同的环境轮换和相位种子：rollout 1 对应 `environment_0/1505`，rollout 101 对应 `environment_100/1605`。当前相位重置服务在导航前执行，因此同一 seed 在本次系统中会得到可复现的导航起始相位。基线数据单独写入 `train_set/vitfly_original_phase1505/`，不会混入现有实验专家数据。
 
 原始专家没有 A* 和候选速度诊断，因此审核器会跳过这些“仅属于本实验专家”的字段检查，但仍使用完全相同的通用数据安全标准：碰撞、负向速度、终点后样本、PNG/CSV 对齐、低速比例、前向回退、障碍物净空和 evaluator 结果均必须通过。
 

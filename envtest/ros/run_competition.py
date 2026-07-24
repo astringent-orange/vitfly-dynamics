@@ -191,6 +191,12 @@ class AgilePilotNode:
         
         # @NOTE: Dont log too fast, I have not tested that
         self.time_interval = .03 #Time interval for logging
+        try:
+            self.flush_every_samples = max(
+                1, int(os.environ.get("VITFLY_FLUSH_EVERY_SAMPLES", "50"))
+            )
+        except ValueError:
+            self.flush_every_samples = 50
 
         self.data_collection_xrange = [2, 60]
 
@@ -209,7 +215,7 @@ class AgilePilotNode:
         self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
         self.dynamic_phase_seed = os.environ.get("VITFLY_DYNAMIC_PHASE_SEED", self.env_seed)
-        self.dynamic_phase_mode = "seeded_reset"
+        self.dynamic_phase_mode = "seeded_navigation_reset"
         atexit.register(self.flush_data_log)
         rospy.on_shutdown(self.shutdown_callback)
 
@@ -697,8 +703,9 @@ class AgilePilotNode:
         if state_snapshot.t - self.t1 > self.time_interval or self.t1 == 0:
             self.try_log_sample(command, state_snapshot, None, None)
 
-        # Save once every 10 instances - writing every instance can be expensive
-        if self.count % 5 == 0 and self.count != 0:
+        # Periodic full CSV rewrites are deliberately infrequent; finish and
+        # shutdown paths still flush synchronously.
+        if self.count % self.flush_every_samples == 0 and self.count != 0:
             self.flush_data_log()
 
     def state_callback(self, state_data):
@@ -757,8 +764,7 @@ class AgilePilotNode:
 
             self.try_log_sample(command, state_snapshot, planner_info, nearest_margin)
 
-        # Save once every 10 instances - writing every instance can be expensive
-        if self.count % 2 == 0 and self.count != 0 or abs(state_snapshot.pos[0] - 20) < 1:
+        if self.count % self.flush_every_samples == 0 and self.count != 0:
             self.flush_data_log()
 
     def dynamic_obstacle_callback(self, obs_data):

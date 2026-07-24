@@ -168,7 +168,12 @@ then
     rviz_enabled=True
   else
     run_competition_args=""
-    realtimefactor="real_time_factor:=10.0"
+    if [ -n "$real_time_factor" ]
+    then
+      realtimefactor="real_time_factor:=$real_time_factor"
+    else
+      realtimefactor="real_time_factor:=10.0"
+    fi
     if ((!fixed_env))
     then
       random_env=1
@@ -188,6 +193,15 @@ fi
 
 publish_rgb=True
 publish_optical_flow=True
+
+# State collection only consumes depth. Keeping RGB and optical flow disabled
+# reduces Unity rendering and ROS image transport load without changing the
+# depth frames used by the dataset. Human/debug mode keeps both modalities.
+if [ "$2" = "state" ] && ((!state_human))
+then
+  publish_rgb=False
+  publish_optical_flow=False
+fi
 
 # Batch benchmarks are headless by design.  Apply this after the optional
 # rviz/debug override so no benchmark invocation can accidentally launch RViz
@@ -283,22 +297,25 @@ publish_empty_control() {
   minimum_subscribers="${2:-1}"
   connect_timeout="${3:-5}"
   acknowledgement="${4:-}"
-  if [ "$benchmark_mode" = "1" ]
+  # During regular data collection, hover readiness is the authoritative
+  # synchronization point.  Telemetry ACKs can be unavailable during the
+  # pilot's initial transition and would add a full timeout to every rollout.
+  if [ "$benchmark_mode" != "1" ]
   then
-    control_args=(
-      --topic "$topic_name"
-      --type empty
-      --min-subscribers "$minimum_subscribers"
-      --connect-timeout "$connect_timeout"
-    )
-    if [ -n "$acknowledgement" ]
-    then
-      control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
-    fi
-    "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
-  else
-    rostopic pub "$topic_name" std_msgs/Empty "{}" --once
+    acknowledgement=""
   fi
+  control_args=(
+    --topic "$topic_name"
+    --type empty
+    --min-subscribers "$minimum_subscribers"
+    --connect-timeout "$connect_timeout"
+    --delivery-wait 0.1
+  )
+  if [ -n "$acknowledgement" ]
+  then
+    control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
+  fi
+  "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
 }
 
 publish_bool_control() {
@@ -307,23 +324,23 @@ publish_bool_control() {
   minimum_subscribers="${3:-1}"
   connect_timeout="${4:-5}"
   acknowledgement="${5:-}"
-  if [ "$benchmark_mode" = "1" ]
+  if [ "$benchmark_mode" != "1" ]
   then
-    control_args=(
-      --topic "$topic_name"
-      --type bool
-      --value "$value"
-      --min-subscribers "$minimum_subscribers"
-      --connect-timeout "$connect_timeout"
-    )
-    if [ -n "$acknowledgement" ]
-    then
-      control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
-    fi
-    "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
-  else
-    rostopic pub "$topic_name" std_msgs/Bool "data: $value" --once
+    acknowledgement=""
   fi
+  control_args=(
+    --topic "$topic_name"
+    --type bool
+    --value "$value"
+    --min-subscribers "$minimum_subscribers"
+    --connect-timeout "$connect_timeout"
+    --delivery-wait 0.1
+  )
+  if [ -n "$acknowledgement" ]
+  then
+    control_args+=(--ack "$acknowledgement" --ack-timeout "$connect_timeout")
+  fi
+  "$python_bin" ./envtest/ros/publish_control_message.py "${control_args[@]}"
 }
 
 wait_for_process_exit() {
@@ -491,6 +508,27 @@ force_stop_simulator() {
   return 0
 }
 
+reset_dynamic_phases_for_navigation() {
+  if ! rosparam set /kingfisher/dodgeros_pilot/dynamic_phase_seed "$VITFLY_DYNAMIC_PHASE_SEED"
+  then
+    echo "[LAUNCH SCRIPT] ERROR: failed to set dynamic phase seed."
+    return 1
+  fi
+  phase_response=""
+  if ! phase_response=$(rosservice call /kingfisher/dodgeros_pilot/reset_dynamic_phases "{}")
+  then
+    echo "[LAUNCH SCRIPT] ERROR: failed to reset dynamic obstacle phases before navigation."
+    return 1
+  fi
+  if ! printf '%s\n' "$phase_response" | grep -Eiq 'success:[[:space:]]*(true|1)'
+  then
+    echo "[LAUNCH SCRIPT] ERROR: dynamic phase reset was not acknowledged: $phase_response"
+    return 1
+  fi
+  echo "[LAUNCH SCRIPT] Dynamic obstacle phases reset immediately before navigation."
+  return 0
+}
+
 prepare_pilot_for_rollout() {
   local attempt
   local maximum_attempts=2
@@ -507,7 +545,6 @@ prepare_pilot_for_rollout() {
     then
       return 1
     fi
-    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
     if [ "$reuse_simulator" = "1" ]
     then
       reset_response=""
@@ -525,13 +562,11 @@ prepare_pilot_for_rollout() {
         return 1
       fi
     fi
-    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
     if ! publish_bool_control /kingfisher/dodgeros_pilot/enable true 1 5 pilot_enabled && \
        [ "$benchmark_mode" = "1" ]
     then
       return 1
     fi
-    if [ "$benchmark_mode" != "1" ]; then sleep 1; fi
     if ! publish_empty_control /kingfisher/dodgeros_pilot/start 1 5 && \
        [ "$benchmark_mode" = "1" ]
     then
@@ -540,6 +575,10 @@ prepare_pilot_for_rollout() {
 
     if "$python_bin" ./envtest/ros/wait_for_pilot_hover.py --timeout 30
     then
+      if ! reset_dynamic_phases_for_navigation
+      then
+        return 1
+      fi
       benchmark_stage pilot_ready
       return 0
     fi
@@ -790,6 +829,18 @@ do
     fi
   else
     wait_for_topic /kingfisher/start_navigation 30 || simulator_error_exit
+    if ! publish_empty_control /kingfisher/start_navigation 1 5
+    then
+      echo "[LAUNCH_EVALUATION] Failed to send start navigation command."
+      batch_failed=1
+      stop_evaluator
+      write_rollout_failure_summary navigation_start_error
+    fi
+  fi
+
+  if ((batch_failed))
+  then
+    break
   fi
 
   start_time=$(date +%s)
@@ -835,11 +886,7 @@ do
     then
       sleep 1
     else
-      echo
-      echo [LAUNCH_EVALUATION] Sending start navigation command
-      echo
-      publish_empty_control /kingfisher/start_navigation
-      sleep 2
+      sleep 0.2
     fi
 
     # if the current iteration has surpassed the time limit, something went wrong (possibly: [Pipeline]     Bridge failed!). Kill the simulator.

@@ -13,6 +13,8 @@
     <arg name="rviz" default="True"/>
     <arg name="publish_rgb" default="True"/>
     <arg name="publish_optical_flow" default="True"/>
+    <arg name="direct_hover_start" default="False"/>
+    <arg name="direct_hover_height" default="3.5"/>
 
     <!-- quadrotor simulation -->
     <group ns="$(arg quad_name)">
@@ -27,6 +29,8 @@
             <param name="render" value="$(arg render)"/>
             <param name="publish_rgb" value="$(arg publish_rgb)"/>
             <param name="publish_optical_flow" value="$(arg publish_optical_flow)"/>
+            <param name="direct_hover_start" value="$(arg direct_hover_start)"/>
+            <param name="direct_hover_height" value="$(arg direct_hover_height)"/>
         </node>
     </group>
 

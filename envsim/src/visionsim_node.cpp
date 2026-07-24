@@ -29,11 +29,19 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
 
   pnh_.param("publish_rgb", publish_rgb_, true);
   pnh_.param("publish_optical_flow", publish_optical_flow_, true);
+  pnh_.param("direct_hover_start", direct_hover_start_, false);
+  pnh_.param("direct_hover_height", direct_hover_height_, 3.5);
+  pnh_.param("direct_hover_command_samples",
+             direct_hover_required_command_samples_, 5);
+  pnh_.param("direct_hover_stable_samples",
+             direct_hover_required_stable_samples_, 20);
 
   obstacle_pub_ =
     pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/obstacles", 1);
   dynamic_obstacle_pub_ =
     pnh_.advertise<envsim_msgs::ObstacleArray>("groundtruth/dynamic_obstacles", 1);
+  direct_hover_ready_pub_ =
+    pnh_.advertise<std_msgs::Bool>("direct_hover_ready", 1, true);
 
   if (publish_rgb_) image_pub_ = it.advertise("unity/image", 1);
   depth_pub_ = it.advertise("unity/depth", 1);
@@ -85,6 +93,12 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
   // wait until Unity is up
   ros::WallDuration(1.0).sleep();
   t_start_ = ros::WallTime::now();
+  std_msgs::Bool direct_hover_ready_msg;
+  direct_hover_ready_msg.data = false;
+  direct_hover_ready_pub_.publish(direct_hover_ready_msg);
+  if (direct_hover_start_ && !initializeDirectHover()) {
+    ROS_ERROR("Direct-hover initialization failed; node will remain unready.");
+  }
   sim_thread_ = std::thread(&VisionSim::simLoop, this);
 }
 
@@ -93,6 +107,72 @@ VisionSim::~VisionSim() {
   if (sim_thread_.joinable()) sim_thread_.join();
   if (render_thread_.joinable()) render_thread_.join();
   if (render_ && vision_env_ptr_) vision_env_ptr_->disconnectUnity();
+}
+
+bool VisionSim::initializeDirectHover() {
+  QuadState simulator_state;
+  simulator_state.setZero();
+  simulator_state.p = Vector<3>(0.0, 0.0, direct_hover_height_);
+  {
+    const std::lock_guard<std::mutex> lock(sim_mutex_);
+    if (!simulator_.reset(simulator_state)) return false;
+    simulator_.setCommand(Command(0.0, 0.0, Vector<3>::Zero()));
+  }
+
+  QuadState pilot_state = simulator_state;
+  pilot_state.t = t_start_.toSec();
+  Pilot& pilot = ros_pilot_.getPilot();
+  pilot.off();
+  pilot.odometryCallback(pilot_state);
+  if (!pilot.start()) return false;
+  pilot.enable(true);
+
+  direct_hover_pending_ = true;
+  pnh_.setParam("direct_hover_height", direct_hover_height_);
+  pnh_.setParam("direct_hover_warmup_seconds", 0.0);
+  ROS_INFO("Direct-hover initialization armed at z=%.3fm; holding dynamics "
+           "until control is ready.", direct_hover_height_);
+  return true;
+}
+
+void VisionSim::updateDirectHoverReadiness(const QuadState& state,
+                                            const Command& command) {
+  if (!direct_hover_start_ || direct_hover_ready_) return;
+
+  if (direct_hover_pending_) {
+    if (command.valid() && command.isRatesThrust() &&
+        command.collective_thrust > 2.0) {
+      direct_hover_valid_command_samples_ += 1;
+    } else {
+      direct_hover_valid_command_samples_ = 0;
+    }
+    if (direct_hover_valid_command_samples_ >=
+        direct_hover_required_command_samples_) {
+      direct_hover_pending_ = false;
+      direct_hover_released_ = true;
+      direct_hover_release_time_ = ros::WallTime::now();
+      ROS_INFO("Direct-hover control is valid; releasing dynamics.");
+    }
+    return;
+  }
+
+  if (!direct_hover_released_) return;
+  const bool stable =
+    state.p.z() >= direct_hover_height_ - 0.1 && state.v.norm() <= 0.35 &&
+    state.w.norm() <= 0.5;
+  direct_hover_stable_samples_ = stable ? direct_hover_stable_samples_ + 1 : 0;
+  if (direct_hover_stable_samples_ < direct_hover_required_stable_samples_)
+    return;
+
+  direct_hover_ready_ = true;
+  const Scalar warmup_seconds =
+    (ros::WallTime::now() - direct_hover_release_time_).toSec();
+  pnh_.setParam("direct_hover_warmup_seconds", warmup_seconds);
+  std_msgs::Bool ready_msg;
+  ready_msg.data = true;
+  direct_hover_ready_pub_.publish(ready_msg);
+  ROS_INFO("Direct-hover ready after %.3fs warmup: z=%.3fm speed=%.3fm/s.",
+           warmup_seconds, state.p.z(), state.v.norm());
 }
 
 bool VisionSim::resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases) {
@@ -203,6 +283,7 @@ void VisionSim::simLoop() {
       command_time_origin = t_start_.toSec() + sim_time_offset_;
     }
     cmd.t -= command_time_origin;
+    updateDirectHoverReadiness(quad_state, cmd);
     if (cmd.valid()) {
       {
         const std::lock_guard<std::mutex> lock(sim_mutex_);
@@ -217,7 +298,7 @@ void VisionSim::simLoop() {
         simulator_.setCommand(zero_cmd);
       }
     }
-    {
+    if (!direct_hover_pending_) {
       const std::lock_guard<std::mutex> lock(sim_mutex_);
       if (!simulator_.run(sim_dt_))
         ROS_WARN_THROTTLE(1.0, "Simulation failed!");

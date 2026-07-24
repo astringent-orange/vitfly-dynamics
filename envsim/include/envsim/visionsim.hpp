@@ -13,6 +13,7 @@
 
 // #include <filesystem>
 
+#include "std_msgs/Bool.h"
 #include "std_msgs/String.h"
 
 // -- agilicious
@@ -44,6 +45,9 @@ class VisionSim {
   bool resetDynamicPhasesCallback(std_srvs::Trigger::Request& request,
                                   std_srvs::Trigger::Response& response);
   bool resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases);
+  bool initializeDirectHover();
+  void updateDirectHoverReadiness(const QuadState& state,
+                                  const Command& command);
 
   void simLoop();
   void publishState(const QuadState& state);
@@ -61,6 +65,7 @@ class VisionSim {
 
   ros::Publisher obstacle_pub_;
   ros::Publisher dynamic_obstacle_pub_;
+  ros::Publisher direct_hover_ready_pub_;
 
   image_transport::Publisher image_pub_;
   image_transport::Publisher depth_pub_;
@@ -77,6 +82,16 @@ class VisionSim {
   bool render_ = false;
   bool publish_rgb_ = true;
   bool publish_optical_flow_ = true;
+  bool direct_hover_start_ = false;
+  bool direct_hover_pending_ = false;
+  bool direct_hover_released_ = false;
+  bool direct_hover_ready_ = false;
+  Scalar direct_hover_height_ = 3.5;
+  int direct_hover_valid_command_samples_ = 0;
+  int direct_hover_stable_samples_ = 0;
+  int direct_hover_required_command_samples_ = 5;
+  int direct_hover_required_stable_samples_ = 20;
+  ros::WallTime direct_hover_release_time_;
   ros::WallTime t_start_;
   Scalar sim_time_offset_ = 0.0;
   Scalar last_published_time_ = 0.0;

@@ -20,14 +20,14 @@ bash launch_evaluation.bash 101 state phase_seed_base=1606
 
 `1606` 只是示例，下一批应使用没有与历史批次重叠的相位基数。若先做小批验证，可将 `101` 改为 `3` 或 `10`。不要同时运行两个采集进程，否则最新轨迹与 `evaluation.yaml` 的对应关系会丢失。
 
-采集完成后，`launch_evaluation.bash` 会自动调用 `curate_dataset.py --apply`。不合格轨迹会从 `envtest/ros/train_set/` 删除，合格轨迹保留；累计统计写入 `collection_summary.json`。正式采集建议先使用 `VITFLY_REAL_TIME_FACTOR=10`，确认稳定后再尝试更高倍率。
+采集完成后，`launch_evaluation.bash` 会自动调用 `curate_dataset.py --apply`。不合格轨迹会从 `envtest/ros/train_set/` 删除，合格轨迹保留；累计统计写入 `collection_summary.json`。本实验 A* 专家通常可以使用 `10` 倍实时倍率；原始 Vitfly 专家每帧要扫描 1089 个候选航点，基线采集必须先使用 `VITFLY_REAL_TIME_FACTOR=1`，否则 Python 回调会落后于仿真并导致无人机悬停。确认基线稳定后再尝试 `2`，不建议直接使用 `10`。
 
 ## 采集 Vitfly 原始专家基线
 
 默认的 `state` 模式使用本实验的 `astar_dynamic` 专家。若要采集 Vitfly 原始专家策略，增加 `expert=vitfly`：
 
 ```bash
-VITFLY_REAL_TIME_FACTOR=10 \
+VITFLY_REAL_TIME_FACTOR=1 \
 VITFLY_DATASET_DIR=./envtest/ros/train_set/vitfly_original_phase1505 \
 VITFLY_EVALUATION_PATH=./envtest/ros/train_set/vitfly_original_phase1505_evaluation.yaml \
 bash launch_evaluation.bash 101 state expert=vitfly phase_seed_base=1505

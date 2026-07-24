@@ -19,6 +19,8 @@ RosBridge::RosBridge(const ros::NodeHandle& nh, const ros::NodeHandle& pnh,
   armed_pub_ = pnh_.advertise<std_msgs::Bool>(armed_topic, 10);
 }
 
+RosBridge::~RosBridge() { stopTimeoutGuard(); }
+
 bool RosBridge::sendCommand(const Command& command, const bool active) {
   dodgeros_msgs::Command ros_command = toRosCommand(command);
   std_msgs::Bool armed_msg;

@@ -15,6 +15,7 @@ class RosBridge : public BridgeBase {
                      const std::string& command_topic = "command",
                      const std::string& armed_topic = "armed",
                      const Scalar timeout = 0.1, const int n_max_timeouts = 10);
+  ~RosBridge() override;
 
  protected:
   virtual bool sendCommand(const Command& command, const bool active);

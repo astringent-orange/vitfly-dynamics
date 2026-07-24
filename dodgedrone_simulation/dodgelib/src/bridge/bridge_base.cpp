@@ -15,7 +15,15 @@ BridgeBase::BridgeBase(const std::string& name,
 }
 
 BridgeBase::~BridgeBase() {
-  shutdown_ = true;
+  stopTimeoutGuard();
+}
+
+void BridgeBase::stopTimeoutGuard() {
+  {
+    const std::lock_guard<std::mutex> lock(timeout_wait_mutex_);
+    shutdown_ = true;
+  }
+  timeout_reset_cv_.notify_all();
   if (timeout_guard_thread_.joinable()) timeout_guard_thread_.join();
 }
 

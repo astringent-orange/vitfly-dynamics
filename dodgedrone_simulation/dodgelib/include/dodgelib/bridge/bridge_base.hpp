@@ -36,6 +36,7 @@ class BridgeBase : public Module<BridgeBase> {
   virtual void registerFeedbackCallback(FeedbackCallbackFunction function);
 
  protected:
+  void stopTimeoutGuard();
   virtual bool sendCommand(const Command& command, const bool active) = 0;
   virtual void guardTimeout();
 

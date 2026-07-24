@@ -43,6 +43,8 @@ rollout_timing="${VITFLY_ROLLOUT_TIMING:-0}"
 rollout_timing_log="${VITFLY_ROLLOUT_TIMING_LOG:-}"
 ros_sigint_timeout="${VITFLY_ROS_SIGINT_TIMEOUT:-3}"
 ros_sigterm_timeout="${VITFLY_ROS_SIGTERM_TIMEOUT:-1}"
+direct_hover_start="${VITFLY_DIRECT_HOVER_START:-1}"
+direct_hover_height="${VITFLY_DIRECT_HOVER_HEIGHT:-3.5}"
 
 for arg in "${@:3}"
 do
@@ -101,6 +103,12 @@ do
   then
     benchmark_mode=1
     export VITFLY_BENCHMARK_MODE=1
+  elif [ "$arg" = "direct_hover" ]
+  then
+    direct_hover_start=1
+  elif [ "$arg" = "traditional_takeoff" ]
+  then
+    direct_hover_start=0
   elif [[ "$arg" == model_type=* || "$arg" == frame_offset=* ]]
   then
     echo "[LAUNCH SCRIPT] model_type/frame_offset are obsolete; use offset=0,1,2"
@@ -230,6 +238,20 @@ then
   rviz_enabled=True
 fi
 
+if [ "$2" != "state" ] || ((state_human)) || [ "$reuse_simulator" = "1" ]
+then
+  direct_hover_start=0
+fi
+if [ "$direct_hover_start" = "1" ]
+then
+  direct_hover_ros=True
+  export VITFLY_DIRECT_HOVER_START=1
+else
+  direct_hover_ros=False
+  export VITFLY_DIRECT_HOVER_START=0
+fi
+export VITFLY_DIRECT_HOVER_HEIGHT="$direct_hover_height"
+
 publish_rgb=True
 publish_optical_flow=True
 
@@ -315,6 +337,22 @@ wait_for_message() {
   topic_name="$1"
   timeout_s="${2:-45}"
   timeout "$timeout_s" rostopic echo -n 1 "$topic_name" >/dev/null 2>&1
+}
+
+wait_for_bool_true() {
+  topic_name="$1"
+  timeout_s="${2:-10}"
+  start_wait=$(date +%s)
+  while (( $(date +%s) - start_wait < timeout_s ))
+  do
+    if timeout 2 rostopic echo -n 1 "$topic_name" 2>/dev/null | \
+       grep -Eiq 'data:[[:space:]]*(true|1)'
+    then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
 }
 
 wall_time_ms() {
@@ -531,7 +569,9 @@ launch_simulator() {
     --sigterm-timeout="$ros_sigterm_timeout" \
     envsim visionenv_sim.launch render:=True gui:=False \
     rviz:=$rviz_enabled publish_rgb:=$publish_rgb \
-    publish_optical_flow:=$publish_optical_flow $realtimefactor &
+    publish_optical_flow:=$publish_optical_flow \
+    direct_hover_start:=$direct_hover_ros \
+    direct_hover_height:=$direct_hover_height $realtimefactor &
   ROS_PID="$!"
   echo $ROS_PID
 
@@ -619,6 +659,27 @@ reset_dynamic_phases_for_navigation() {
 prepare_pilot_for_rollout() {
   local attempt
   local maximum_attempts=2
+  if [ "$direct_hover_start" = "1" ] && [ "$reuse_simulator" != "1" ]
+  then
+    echo "[LAUNCH SCRIPT] Waiting for direct-hover initialization."
+    if wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready 10 && \
+       "$python_bin" ./envtest/ros/wait_for_pilot_hover.py --timeout 5
+    then
+      if ! reset_dynamic_phases_for_navigation
+      then
+        return 1
+      fi
+      benchmark_stage pilot_ready
+      return 0
+    fi
+
+    echo "[LAUNCH SCRIPT] Direct-hover initialization failed; falling back to traditional takeoff."
+    direct_hover_start=0
+    direct_hover_ros=False
+    export VITFLY_DIRECT_HOVER_START=0
+    force_stop_simulator || return 1
+    launch_simulator || return 1
+  fi
   if [ "$benchmark_mode" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     maximum_attempts=1

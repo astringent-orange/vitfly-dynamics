@@ -269,6 +269,25 @@ class EvaluationLifecycleTest(unittest.TestCase):
         self.assertIn("wait_for_simulator_shutdown 5", source)
         self.assertIn("wait_for_simulator_shutdown 2", source)
 
+    def test_state_collection_defaults_to_direct_hover_with_fallback(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn('VITFLY_DIRECT_HOVER_START:-1', source)
+        self.assertIn('direct_hover_start:=$direct_hover_ros', source)
+        self.assertIn(
+            "wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready 10",
+            source,
+        )
+        self.assertIn(
+            "Direct-hover initialization failed; falling back to traditional takeoff.",
+            source,
+        )
+        self.assertIn('export VITFLY_DIRECT_HOVER_START=0', source)
+
+    def test_direct_hover_can_be_disabled_explicitly(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn('elif [ "$arg" = "traditional_takeoff" ]', source)
+        self.assertIn("direct_hover_start=0", source)
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)

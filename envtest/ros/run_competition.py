@@ -165,6 +165,9 @@ class AgilePilotNode:
                            'env_seed':[],
                            'dynamic_phase_seed':[],
                            'dynamic_phase_mode':[],
+                           'initialization_mode':[],
+                           'direct_hover_height':[],
+                           'direct_hover_warmup_time':[],
                            'expert_strategy':[],
                            'quat_1':[],
                            'quat_2':[],
@@ -217,6 +220,20 @@ class AgilePilotNode:
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
         self.dynamic_phase_seed = os.environ.get("VITFLY_DYNAMIC_PHASE_SEED", self.env_seed)
         self.dynamic_phase_mode = "seeded_navigation_reset"
+        self.initialization_mode = (
+            "direct_hover"
+            if os.environ.get("VITFLY_DIRECT_HOVER_START", "0") == "1"
+            else "traditional_takeoff"
+        )
+        self.direct_hover_height = float(
+            os.environ.get("VITFLY_DIRECT_HOVER_HEIGHT", "3.5")
+        )
+        self.direct_hover_warmup_time = float(
+            rospy.get_param(
+                f"/{quad_name}/dodgeros_pilot/direct_hover_warmup_seconds",
+                0.0,
+            )
+        )
         requested_expert = os.environ.get("VITFLY_STATE_EXPERT", "astar_dynamic").strip().lower()
         if requested_expert in ("vitfly", "original", "vitfly_original"):
             self.expert_strategy = "vitfly_original"
@@ -621,6 +638,9 @@ class AgilePilotNode:
             self.env_seed,
             self.dynamic_phase_seed,
             self.dynamic_phase_mode,
+            self.initialization_mode,
+            self.direct_hover_height,
+            self.direct_hover_warmup_time,
             self.expert_strategy,
             state_snapshot.att[0],
             state_snapshot.att[1],

@@ -19,20 +19,29 @@ from validate_dataset import _path_motion_metrics, _trajectory_path, validate_tr
 
 HARD_VALIDATION_OPTIONS = {
     "require_env_fields": True,
-    "max_low_speed_ratio": 1.0,
-    "min_nearest_margin": 0.0,
-    "max_negative_path_speed_ratio": 1.0,
-    "max_path_backtrack_distance": 0.75,
-    "max_path_cross_track_error": 1.5,
-}
-
-WARNING_VALIDATION_OPTIONS = {
-    "require_env_fields": True,
+    # Training data must satisfy the same safety and motion-quality gates as
+    # the standalone validator, rather than merely being collision-free.
+    "max_post_goal_rows": 0,
+    "max_negative_xcmd_rows": 0,
     "max_low_speed_ratio": 0.15,
+    "max_collision_rows": 0,
     "min_nearest_margin": 0.0,
     "max_negative_path_speed_ratio": 0.02,
     "max_path_backtrack_distance": 0.3,
     "max_path_cross_track_error": 0.8,
+    "max_applied_speed_accel": 3.5,
+    "max_yield_zero_positive_frames": 2,
+}
+
+WARNING_VALIDATION_OPTIONS = {
+    "require_env_fields": True,
+    # Advisory thresholds are intentionally tighter than the training gate;
+    # they remain in collection_summary for diagnosing borderline rollouts.
+    "max_low_speed_ratio": 0.10,
+    "min_nearest_margin": 0.3,
+    "max_negative_path_speed_ratio": 0.01,
+    "max_path_backtrack_distance": 0.15,
+    "max_path_cross_track_error": 0.5,
 }
 
 SUMMARY_FILENAME = "collection_summary.json"

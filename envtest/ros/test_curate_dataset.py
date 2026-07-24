@@ -8,10 +8,19 @@ from unittest.mock import patch
 
 import yaml
 
-from curate_dataset import apply_curation, curate_dataset
+from curate_dataset import HARD_VALIDATION_OPTIONS, apply_curation, curate_dataset
 
 
 class CurateDatasetTest(unittest.TestCase):
+    def test_training_gate_matches_strict_expert_quality_standard(self):
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_post_goal_rows"], 0)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_negative_xcmd_rows"], 0)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_collision_rows"], 0)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_low_speed_ratio"], 0.15)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_negative_path_speed_ratio"], 0.02)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_path_backtrack_distance"], 0.3)
+        self.assertEqual(HARD_VALIDATION_OPTIONS["max_path_cross_track_error"], 0.8)
+
     def _make_folder(self, root, name, environment):
         folder = os.path.join(root, name)
         os.mkdir(folder)

@@ -232,6 +232,21 @@ class EvaluationLifecycleTest(unittest.TestCase):
             normal_body,
         )
 
+    def test_random_rollouts_do_not_repeat_clean_force_stop(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn("simulator_needs_cleanup=1", source)
+        random_block_start = source.index('if ((random_env))\n  then\n    env_id=')
+        random_block_end = source.index("launch_simulator || simulator_error_exit", random_block_start)
+        random_block = source[random_block_start:random_block_end]
+        self.assertIn("if ((simulator_needs_cleanup))", random_block)
+        self.assertNotIn("force_stop_simulator || simulator_error_exit\n    launch_simulator", random_block)
+
+    def test_simulator_waits_for_messages_instead_of_fixed_sleep(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        self.assertIn("wait_for_message()", source)
+        self.assertIn("wait_for_message /kingfisher/dodgeros_pilot/state 45", source)
+        self.assertNotIn("sleep 5\n  wait_for_sim_topics", source)
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)
@@ -274,12 +289,15 @@ class EvaluationLifecycleTest(unittest.TestCase):
             self.assertIn(ack, source)
         self.assertIn("reset_response", source)
 
-    def test_simulator_startup_delay_is_five_seconds(self):
+    def test_simulator_waits_for_live_data_before_ready(self):
         source = (ROOT / "launch_evaluation.bash").read_text()
         launch_start = source.index("launch_simulator()")
         launch_end = source.index("stop_simulator()", launch_start)
         launch_body = source[launch_start:launch_end]
-        self.assertIn("sleep 5", launch_body)
+        self.assertIn("wait_for_sim_topics || return 1", launch_body)
+        self.assertIn("wait_for_message /kingfisher/dodgeros_pilot/state 45", source)
+        self.assertIn("wait_for_message /kingfisher/dodgeros_pilot/unity/depth 45", source)
+        self.assertNotIn("sleep 5", launch_body)
         self.assertNotIn("sleep 10", launch_body)
 
     def test_benchmark_control_messages_use_connection_aware_publisher(self):

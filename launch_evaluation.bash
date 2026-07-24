@@ -297,6 +297,12 @@ wait_for_topic() {
   return 0
 }
 
+wait_for_message() {
+  topic_name="$1"
+  timeout_s="${2:-45}"
+  timeout "$timeout_s" rostopic echo -n 1 "$topic_name" >/dev/null 2>&1
+}
+
 wait_for_planner_ready() {
   [ -z "$planner_ready_topic" ] && return 0
   timeout_s="${1:-45}"
@@ -323,6 +329,13 @@ wait_for_sim_topics() {
   wait_for_topic /kingfisher/dodgeros_pilot/groundtruth/obstacles 45 || return 1
   wait_for_topic /kingfisher/dodgeros_pilot/groundtruth/dynamic_obstacles 45 || return 1
   wait_for_topic /kingfisher/dodgeros_pilot/unity/depth 45 || return 1
+  # Topic registration can happen before Unity and the simulation loop have
+  # produced their first messages. Wait for actual data instead of adding a
+  # fixed five-second delay to every rollout.
+  wait_for_message /kingfisher/dodgeros_pilot/state 45 || return 1
+  wait_for_message /kingfisher/dodgeros_pilot/groundtruth/obstacles 45 || return 1
+  wait_for_message /kingfisher/dodgeros_pilot/groundtruth/dynamic_obstacles 45 || return 1
+  wait_for_message /kingfisher/dodgeros_pilot/unity/depth 45 || return 1
   return 0
 }
 
@@ -487,7 +500,6 @@ launch_simulator() {
     return 1
   fi
 
-  sleep 5
   wait_for_sim_topics || return 1
   benchmark_stage simulator_ready
 }
@@ -772,6 +784,10 @@ datetime=$(date '+d%m_%d_t%H_%M')
 relaunch_sim=0
 batch_failed=0
 batch_infrastructure_failed=0
+# A fresh invocation cleans any stale simulator once. After a normal rollout
+# cleanup, the next random environment can start directly without repeating
+# the same force-stop sequence.
+simulator_needs_cleanup=1
 
 for i in $(eval echo {1..$N})
 do
@@ -784,7 +800,11 @@ do
     export VITFLY_DYNAMIC_PHASE_SEED="${phase_seed_override:-$((phase_seed_base + i - 1))}"
     echo "[LAUNCH SCRIPT] Using environment $VITFLY_ENV_LEVEL/$VITFLY_ENV_FOLDER seed=$VITFLY_ENV_SEED phase_seed=$VITFLY_DYNAMIC_PHASE_SEED"
     ensure_environment_exists || simulator_error_exit
-    force_stop_simulator || simulator_error_exit
+    if ((simulator_needs_cleanup))
+    then
+      force_stop_simulator || simulator_error_exit
+      simulator_needs_cleanup=0
+    fi
     launch_simulator || simulator_error_exit
   fi
 
@@ -964,6 +984,12 @@ do
   elif ((random_env))
   then
     stop_simulator
+    if simulator_stack_running || ros_master_ready
+    then
+      simulator_needs_cleanup=1
+    else
+      simulator_needs_cleanup=0
+    fi
   fi
   benchmark_stage cleanup_finished
 

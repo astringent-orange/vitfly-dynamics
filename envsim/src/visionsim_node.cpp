@@ -17,6 +17,8 @@ VisionSim::VisionSim(const ros::NodeHandle &nh, const ros::NodeHandle &pnh)
   reset_sub_ = pnh_.subscribe("reset_sim", 1, &VisionSim::resetCallback, this);
   reset_benchmark_service_ = pnh_.advertiseService(
     "reset_benchmark", &VisionSim::resetBenchmarkCallback, this);
+  reset_dynamic_phases_service_ = pnh_.advertiseService(
+    "reset_dynamic_phases", &VisionSim::resetDynamicPhasesCallback, this);
 
   // Publishers
   clock_pub_ = nh_.advertise<rosgraph_msgs::Clock>("/clock", 1);
@@ -141,6 +143,27 @@ bool VisionSim::resetBenchmarkCallback(std_srvs::Trigger::Request& request,
   std::ostringstream message;
   message << "phase_seed=" << std::max(seed, 0) << " phases=" << phases.size();
   response.message = message.str();
+  return true;
+}
+
+bool VisionSim::resetDynamicPhasesCallback(std_srvs::Trigger::Request& request,
+                                            std_srvs::Trigger::Response& response) {
+  (void)request;
+  int seed = 0;
+  pnh_.param("dynamic_phase_seed", seed, 0);
+  std::vector<Scalar> phases;
+  {
+    const std::lock_guard<std::mutex> lock(dynamic_objects_mutex_);
+    phases = vision_env_ptr_->resetDynamicObstaclePhases(
+      static_cast<uint32_t>(std::max(seed, 0)));
+  }
+  response.success = true;
+  std::ostringstream message;
+  message << "phase_seed=" << std::max(seed, 0)
+          << " phases=" << phases.size();
+  response.message = message.str();
+  ROS_INFO_STREAM("Reset dynamic obstacle phases before navigation with seed="
+                  << std::max(seed, 0));
   return true;
 }
 

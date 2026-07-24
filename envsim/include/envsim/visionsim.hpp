@@ -40,6 +40,8 @@ class VisionSim {
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
   bool resetBenchmarkCallback(std_srvs::Trigger::Request& request,
                               std_srvs::Trigger::Response& response);
+  bool resetDynamicPhasesCallback(std_srvs::Trigger::Request& request,
+                                  std_srvs::Trigger::Response& response);
   bool resetSimulation(uint32_t phase_seed, std::vector<Scalar>* phases);
 
   void simLoop();
@@ -51,6 +53,7 @@ class VisionSim {
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber reset_sub_;
   ros::ServiceServer reset_benchmark_service_;
+  ros::ServiceServer reset_dynamic_phases_service_;
   ros::Publisher odometry_pub_;
   ros::Publisher state_pub_;
   ros::Publisher clock_pub_;

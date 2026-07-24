@@ -272,9 +272,10 @@ class EvaluationLifecycleTest(unittest.TestCase):
     def test_state_collection_defaults_to_direct_hover_with_fallback(self):
         source = (ROOT / "launch_evaluation.bash").read_text()
         self.assertIn('VITFLY_DIRECT_HOVER_START:-1', source)
+        self.assertIn('VITFLY_DIRECT_HOVER_READY_TIMEOUT:-10', source)
         self.assertIn('direct_hover_start:=$direct_hover_ros', source)
         self.assertIn(
-            "wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready 10",
+            "wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready",
             source,
         )
         self.assertIn(

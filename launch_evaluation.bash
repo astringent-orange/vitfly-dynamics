@@ -45,6 +45,7 @@ ros_sigint_timeout="${VITFLY_ROS_SIGINT_TIMEOUT:-3}"
 ros_sigterm_timeout="${VITFLY_ROS_SIGTERM_TIMEOUT:-1}"
 direct_hover_start="${VITFLY_DIRECT_HOVER_START:-1}"
 direct_hover_height="${VITFLY_DIRECT_HOVER_HEIGHT:-3.5}"
+direct_hover_ready_timeout="${VITFLY_DIRECT_HOVER_READY_TIMEOUT:-10}"
 
 for arg in "${@:3}"
 do
@@ -184,6 +185,12 @@ fi
 if ! [[ "$phase_seed_base" =~ ^[0-9]+$ ]]
 then
   echo "[LAUNCH SCRIPT] phase_seed_base must be a nonnegative integer, got: $phase_seed_base"
+  exit 1
+fi
+
+if ! [[ "$direct_hover_ready_timeout" =~ ^[0-9]+$ ]]
+then
+  echo "[LAUNCH SCRIPT] VITFLY_DIRECT_HOVER_READY_TIMEOUT must be a nonnegative integer."
   exit 1
 fi
 
@@ -662,7 +669,8 @@ prepare_pilot_for_rollout() {
   if [ "$direct_hover_start" = "1" ] && [ "$reuse_simulator" != "1" ]
   then
     echo "[LAUNCH SCRIPT] Waiting for direct-hover initialization."
-    if wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready 10 && \
+    if wait_for_bool_true /kingfisher/dodgeros_pilot/direct_hover_ready \
+         "$direct_hover_ready_timeout" && \
        "$python_bin" ./envtest/ros/wait_for_pilot_hover.py --timeout 5
     then
       if ! reset_dynamic_phases_for_navigation

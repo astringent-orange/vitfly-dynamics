@@ -116,7 +116,16 @@ RosPilot::RosPilot(const ros::NodeHandle& nh, const ros::NodeHandle& pnh)
     std::thread(&RosPilot::referencePublisher, this);
 }
 
-RosPilot::~RosPilot() { shutdown_ = true; }
+RosPilot::~RosPilot() {
+  {
+    const std::lock_guard<std::mutex> lock(reference_publishing_mtx_);
+    shutdown_ = true;
+  }
+  reference_publishing_cv_.notify_all();
+  if (reference_publishing_thread_.joinable()) {
+    reference_publishing_thread_.join();
+  }
+}
 
 void RosPilot::runPipeline(const ros::TimerEvent& event) {
   pilot_.runPipeline(event.current_real.toSec());
@@ -334,7 +343,7 @@ void RosPilot::pipelineCallback(const QuadState& state,
 }
 
 void RosPilot::referencePublisher() {
-  while (!shutdown_ && ros::ok()) {
+  while (ros::ok()) {
     std::unique_lock<std::mutex> lk(reference_publishing_mtx_);
     reference_publishing_cv_.wait_for(lk, std::chrono::seconds(1));
     if (shutdown_ || !ros::ok()) break;

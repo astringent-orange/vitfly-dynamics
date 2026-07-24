@@ -188,6 +188,14 @@ class EvaluationLifecycleTest(unittest.TestCase):
         self.assertIn("if (publish_optical_flow_)", simulator_source)
         self.assertIn("if (!camera->getDepthMap(depth))", simulator_source)
 
+    def test_automated_state_collection_disables_terminal_plots_by_default(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        state_block_start = source.index('if [ "$2" = "state" ] && ((!state_human))')
+        state_block_end = source.index("# Batch benchmarks", state_block_start)
+        state_block = source[state_block_start:state_block_end]
+        self.assertIn("export VITFLY_EVAL_PLOTS=false", state_block)
+        self.assertIn('if [ -z "${VITFLY_EVAL_PLOTS:-}" ]', state_block)
+
     def test_benchmark_controller_skips_rgb_and_debug_image_endpoints(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         rgb_initialization = source.index("self.rgb_img_sub = None")

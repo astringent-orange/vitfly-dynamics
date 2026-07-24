@@ -226,6 +226,15 @@ if [ "$2" = "state" ] && ((!state_human))
 then
   publish_rgb=False
   publish_optical_flow=False
+
+  # Automated state collection only needs the dataset and YAML summary. The
+  # evaluator's terminal trajectory plots are useful for debugging but add
+  # noise and delay at rollout completion, so disable them by default. Keep an
+  # explicit environment override for debug runs.
+  if [ -z "${VITFLY_EVAL_PLOTS:-}" ]
+  then
+    export VITFLY_EVAL_PLOTS=false
+  fi
 fi
 
 # Batch benchmarks are headless by design.  Apply this after the optional

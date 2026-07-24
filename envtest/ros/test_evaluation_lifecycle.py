@@ -214,6 +214,16 @@ class EvaluationLifecycleTest(unittest.TestCase):
         self.assertLess(ready_wait, start_publish)
         self.assertIn("VITFLY_PLANNER_READY_TOPIC", source)
 
+    def test_normal_navigation_waits_for_both_start_subscribers(self):
+        source = (ROOT / "launch_evaluation.bash").read_text()
+        normal_start = source.index("wait_for_topic /kingfisher/start_navigation 30")
+        normal_end = source.index("start_time=$(date +%s)", normal_start)
+        normal_body = source[normal_start:normal_end]
+        self.assertIn(
+            "publish_empty_control /kingfisher/start_navigation 2 5",
+            normal_body,
+        )
+
     def test_benchmark_disables_per_frame_inference_timing(self):
         source = (ROOT / "envtest" / "ros" / "run_competition.py").read_text()
         self.assertIn('VITFLY_INFERENCE_TIMING_LOGS', source)

@@ -854,7 +854,10 @@ do
     fi
   else
     wait_for_topic /kingfisher/start_navigation 30 || simulator_error_exit
-    if ! publish_empty_control /kingfisher/start_navigation 1 5
+    # Both the evaluator and run_competition.py must receive this one-shot
+    # message. Waiting for only one subscriber can start evaluation while the
+    # controller misses the message and keeps publish_commands disabled.
+    if ! publish_empty_control /kingfisher/start_navigation 2 5
     then
       echo "[LAUNCH_EVALUATION] Failed to send start navigation command."
       batch_failed=1

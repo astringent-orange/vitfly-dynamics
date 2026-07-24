@@ -14,7 +14,12 @@ from datetime import datetime, timezone
 import numpy as np
 import yaml
 
-from validate_dataset import _path_motion_metrics, _trajectory_path, validate_trajectory
+from validate_dataset import (
+    _actual_motion_metrics,
+    _path_motion_metrics,
+    _trajectory_path,
+    validate_trajectory,
+)
 
 
 HARD_VALIDATION_OPTIONS = {
@@ -78,6 +83,13 @@ def _float_metric(rows, column, default=np.nan, reducer=min):
 
 def _path_metrics(rows):
     try:
+        strategies = {
+            row.get("expert_strategy", "").strip().lower()
+            for row in rows
+            if row.get("expert_strategy", "").strip()
+        }
+        if strategies == {"vitfly_original"}:
+            return _actual_motion_metrics(rows)
         path, error = _trajectory_path(rows)
         if path is None:
             return np.nan, np.nan
@@ -129,6 +141,7 @@ def curate_dataset(dataset_dir, evaluation_path, latest=None):
             "env_folder": rows[0].get("env_folder", "") if rows else "",
             "env_seed": rows[0].get("env_seed", "") if rows else "",
             "dynamic_phase_seed": rows[0].get("dynamic_phase_seed", "") if rows else "",
+            "expert_strategy": rows[0].get("expert_strategy", "astar_dynamic") if rows else "",
             "row_count": len(rows),
             "png_count": len([path for path in glob.glob(os.path.join(folder, "*.png")) if not path.endswith("_rgb.png")]),
             "evaluator_success": int(success),

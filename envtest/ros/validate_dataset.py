@@ -136,6 +136,35 @@ def _path_motion_metrics(rows, path):
     return negative_ratio, max_backtrack, path_speed, progress
 
 
+def _actual_motion_metrics(rows):
+    """Measure forward/backward motion for experts without an A* path."""
+    positions = np.asarray([float(row["pos_x"]) for row in rows], dtype=float)
+    speeds = np.asarray([float(row["vel_x"]) for row in rows], dtype=float)
+    reversing = speeds < -0.05
+    negative_ratio = float(np.sum(reversing)) / max(len(rows), 1)
+    max_backtrack = 0.0
+    backtrack_start = None
+    for index, is_reversing in enumerate(reversing):
+        if is_reversing and backtrack_start is None:
+            backtrack_start = positions[max(0, index - 1)]
+        if is_reversing:
+            max_backtrack = max(max_backtrack, float(backtrack_start - positions[index]))
+        else:
+            backtrack_start = None
+    return negative_ratio, max_backtrack
+
+
+def _expert_strategy(rows):
+    strategies = {
+        row.get("expert_strategy", "astar_dynamic").strip().lower()
+        for row in rows
+        if row.get("expert_strategy", "").strip()
+    }
+    if not strategies:
+        return "astar_dynamic", set()
+    return (next(iter(strategies)) if len(strategies) == 1 else "mixed"), strategies
+
+
 def validate_trajectory(
     path,
     require_env_fields=False,
@@ -159,6 +188,9 @@ def validate_trajectory(
     with open(csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
     fieldnames = rows[0].keys() if rows else []
+    expert_strategy, expert_strategies = _expert_strategy(rows)
+    if len(expert_strategies) > 1:
+        errors.append(f"{path}: mixed expert strategies {sorted(expert_strategies)}")
     depth_pngs = sorted(p for p in glob.glob(os.path.join(path, "*.png")) if not p.endswith("_rgb.png"))
     rgb_pngs = sorted(glob.glob(os.path.join(path, "*_rgb.png")))
 
@@ -202,24 +234,30 @@ def validate_trajectory(
                 errors.append(f"{path}: low-speed ratio {low_speed_ratio:.3f} > {max_low_speed_ratio:.3f}")
     if {"vel_x", "vel_y", "vel_z", "pos_x", "pos_y", "pos_z"}.issubset(fieldnames):
         try:
-            path_polyline, path_error = _trajectory_path(rows, supplied_points=path_points)
-            if path_polyline is None:
-                if require_env_fields or path_points is not None:
-                    errors.append(f"{path}: cannot validate path-projected motion: {path_error}")
+            if expert_strategy == "vitfly_original":
+                negative_path_ratio, max_backtrack = _actual_motion_metrics(rows)
+                path_polyline = None
+                path_error = None
             else:
-                negative_path_ratio, max_backtrack, _, _ = _path_motion_metrics(rows, path_polyline)
+                path_polyline, path_error = _trajectory_path(rows, supplied_points=path_points)
+                if path_polyline is None:
+                    if require_env_fields or path_points is not None:
+                        errors.append(f"{path}: cannot validate path-projected motion: {path_error}")
+                else:
+                    negative_path_ratio, max_backtrack, _, _ = _path_motion_metrics(rows, path_polyline)
         except ValueError:
             errors.append(f"{path}: invalid path-projected velocity or position")
         else:
-            if path_polyline is not None:
+            if expert_strategy == "vitfly_original" or path_polyline is not None:
+                motion_label = "forward" if expert_strategy == "vitfly_original" else "path"
                 if negative_path_ratio > max_negative_path_speed_ratio:
                     errors.append(
-                        f"{path}: negative path-speed ratio {negative_path_ratio:.3f} "
+                        f"{path}: negative {motion_label}-speed ratio {negative_path_ratio:.3f} "
                         f"> {max_negative_path_speed_ratio:.3f}"
                     )
                 if max_backtrack > max_path_backtrack_distance:
                     errors.append(
-                        f"{path}: max continuous path backtrack {max_backtrack:.3f}m "
+                        f"{path}: max continuous {motion_label} backtrack {max_backtrack:.3f}m "
                         f"> {max_path_backtrack_distance:.3f}m"
                     )
     candidate_fields = {
@@ -241,7 +279,7 @@ def validate_trajectory(
         "candidate_predicted_stop_distance",
         "desired_vel",
     }
-    if candidate_fields.issubset(fieldnames):
+    if candidate_fields.issubset(fieldnames) and expert_strategy != "vitfly_original":
         try:
             selected_speeds = np.asarray([float(row["candidate_selected_speed"]) for row in rows])
             desired_speeds = np.asarray([float(row["desired_vel"]) for row in rows])
@@ -408,7 +446,7 @@ def validate_trajectory(
     astar_success = 0
     if "astar_success" in fieldnames:
         astar_success = sum(int(float(row["astar_success"])) for row in rows if row.get("astar_success", "") != "")
-    if "astar_success" in fieldnames and astar_success == 0:
+    if "astar_success" in fieldnames and astar_success == 0 and expert_strategy != "vitfly_original":
         errors.append(f"{path}: no successful A* samples")
     avoidance_rows = 0
     if "avoidance_active" in fieldnames:

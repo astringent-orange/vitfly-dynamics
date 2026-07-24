@@ -165,6 +165,7 @@ class AgilePilotNode:
                            'env_seed':[],
                            'dynamic_phase_seed':[],
                            'dynamic_phase_mode':[],
+                           'expert_strategy':[],
                            'quat_1':[],
                            'quat_2':[],
                            'quat_3':[],
@@ -216,6 +217,15 @@ class AgilePilotNode:
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
         self.dynamic_phase_seed = os.environ.get("VITFLY_DYNAMIC_PHASE_SEED", self.env_seed)
         self.dynamic_phase_mode = "seeded_navigation_reset"
+        requested_expert = os.environ.get("VITFLY_STATE_EXPERT", "astar_dynamic").strip().lower()
+        if requested_expert in ("vitfly", "original", "vitfly_original"):
+            self.expert_strategy = "vitfly_original"
+        elif requested_expert in ("astar", "astar_dynamic", "experiment"):
+            self.expert_strategy = "astar_dynamic"
+        else:
+            raise ValueError(
+                "VITFLY_STATE_EXPERT must be astar_dynamic or vitfly_original"
+            )
         atexit.register(self.flush_data_log)
         rospy.on_shutdown(self.shutdown_callback)
 
@@ -232,8 +242,19 @@ class AgilePilotNode:
 
         self.state_expert = None
         if not self.vision_based and not self.keyboard:
-            self.state_expert = AStarDynamicExpert()
-            print("[RUN_COMPETITION] A* dynamic state expert initialized")
+            if self.expert_strategy == "astar_dynamic":
+                self.state_expert = AStarDynamicExpert()
+                print("[RUN_COMPETITION] A* dynamic state expert initialized")
+            elif self.expert_strategy == "vitfly_original":
+                print("[RUN_COMPETITION] Original Vitfly grid-waypoint expert initialized")
+            else:
+                raise ValueError(
+                    "VITFLY_STATE_EXPERT must be astar_dynamic or vitfly_original"
+                )
+        elif self.vision_based:
+            self.expert_strategy = "vision_model"
+        elif self.keyboard:
+            self.expert_strategy = "keyboard"
 
         # load trained model here (copied over from user_code.py)
         if self.vision_based:
@@ -600,6 +621,7 @@ class AgilePilotNode:
             self.env_seed,
             self.dynamic_phase_seed,
             self.dynamic_phase_mode,
+            self.expert_strategy,
             state_snapshot.att[0],
             state_snapshot.att[1],
             state_snapshot.att[2],

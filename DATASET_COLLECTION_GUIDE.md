@@ -22,6 +22,19 @@ bash launch_evaluation.bash 101 state phase_seed_base=1606
 
 采集完成后，`launch_evaluation.bash` 会自动调用 `curate_dataset.py --apply`。不合格轨迹会从 `envtest/ros/train_set/` 删除，合格轨迹保留；累计统计写入 `collection_summary.json`。正式采集建议先使用 `VITFLY_REAL_TIME_FACTOR=10`，确认稳定后再尝试更高倍率。
 
+## 采集 Vitfly 原始专家基线
+
+默认的 `state` 模式使用本实验的 `astar_dynamic` 专家。若要采集 Vitfly 原始专家策略，增加 `expert=vitfly`：
+
+```bash
+VITFLY_REAL_TIME_FACTOR=10 \
+bash launch_evaluation.bash 101 state expert=vitfly phase_seed_base=1505
+```
+
+该模式使用仓库原始的 `compute_command_state_based()` `method_id=1` 网格航点策略，不使用本实验的 A* 路径和候选速度规划。`phase_seed_base=1505` 会与此前 `1505..1605` 批次使用相同的环境轮换和相位种子：rollout 1 对应 `environment_0/1505`，rollout 101 对应 `environment_100/1605`。当前相位重置服务在导航前执行，因此同一 seed 在本次系统中会得到可复现的导航起始相位。
+
+原始专家没有 A* 和候选速度诊断，因此审核器会跳过这些“仅属于本实验专家”的字段检查，但仍使用完全相同的通用数据安全标准：碰撞、负向速度、终点后样本、PNG/CSV 对齐、低速比例、前向回退、障碍物净空和 evaluator 结果均必须通过。
+
 ## 训练集准入标准
 
 当前自动筛选采用与专家策略审核器一致的严格标准。以下任一项失败，轨迹不会进入训练集：

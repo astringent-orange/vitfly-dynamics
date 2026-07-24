@@ -31,6 +31,7 @@ case_config="${VITFLY_CASE_CONFIG:-}"
 evaluation_profile="${VITFLY_EVALUATION_PROFILE:-strict}"
 result_path="${VITFLY_EVALUATION_PATH:-evaluation.yaml}"
 real_time_factor="${VITFLY_REAL_TIME_FACTOR:-}"
+state_expert="${VITFLY_STATE_EXPERT:-astar_dynamic}"
 reuse_simulator="${VITFLY_REUSE_SIMULATOR:-0}"
 simulator_session_id="${VITFLY_SIMULATOR_SESSION_ID:-}"
 python_bin="${VITFLY_PYTHON:-python3}"
@@ -85,6 +86,9 @@ do
   elif [[ "$arg" == real_time_factor=* ]]
   then
     real_time_factor="${arg#real_time_factor=}"
+  elif [[ "$arg" == expert=* ]]
+  then
+    state_expert="${arg#expert=}"
   elif [ "$arg" = "reuse_simulator" ] || [ "$arg" = "external_simulator" ]
   then
     reuse_simulator=1
@@ -98,6 +102,20 @@ do
     exit 1
   fi
 done
+
+case "$state_expert" in
+  astar|astar_dynamic|experiment)
+    state_expert="astar_dynamic"
+    ;;
+  vitfly|original|vitfly_original)
+    state_expert="vitfly_original"
+    ;;
+  *)
+    echo "[LAUNCH SCRIPT] expert must be astar_dynamic or vitfly"
+    exit 1
+    ;;
+esac
+export VITFLY_STATE_EXPERT="$state_expert"
 
 if [ "$benchmark_mode" = "1" ]
 then
@@ -158,6 +176,7 @@ elif [ "$2" = "state" ]
 then
   echo
   echo "[LAUNCH SCRIPT] State based!"
+  echo "[LAUNCH SCRIPT] State expert: $state_expert"
   echo
   run_competition_args="--state_based"
   rviz_enabled=False

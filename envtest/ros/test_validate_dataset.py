@@ -52,7 +52,10 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             csv_path = os.path.join(folder, "data.csv")
             with open(csv_path, "w", newline="") as output:
-                fieldnames = list(dict.fromkeys(REQUIRED_COLUMNS + ["pos_y", "pos_z", "vel_y", "vel_z"]))
+                optional = ["pos_y", "pos_z", "vel_y", "vel_z"]
+                if any("expert_strategy" in row for row in rows):
+                    optional.append("expert_strategy")
+                fieldnames = list(dict.fromkeys(REQUIRED_COLUMNS + optional))
                 writer = csv.DictWriter(output, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
@@ -64,6 +67,25 @@ class ValidateCandidateDatasetTest(unittest.TestCase):
                 path_points=[[0.0, 0.0, 3.0], [20.0, 0.0, 3.0]],
                 **kwargs,
             )[0]
+
+    def test_original_vitfly_expert_uses_common_motion_gate(self):
+        row = self.make_row()
+        row["expert_strategy"] = "vitfly_original"
+        row["astar_success"] = 0
+        row["candidate_safe_count"] = 0
+        row["candidate_prediction_horizon"] = 0.0
+        self.assertEqual(self.validate_rows([row]), [])
+
+    def test_original_vitfly_expert_rejects_forward_backtrack(self):
+        rows = [self.make_row("1.000"), self.make_row("1.100")]
+        for row in rows:
+            row["expert_strategy"] = "vitfly_original"
+            row["astar_success"] = 0
+            row["candidate_safe_count"] = 0
+            row["candidate_prediction_horizon"] = 0.0
+            row["vel_x"] = -1.0
+        errors = self.validate_rows(rows)
+        self.assertTrue(any("negative forward-speed" in error for error in errors))
 
     def test_valid_candidate_row(self):
         self.assertEqual(self.validate_rows([self.make_row()]), [])

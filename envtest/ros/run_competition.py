@@ -18,6 +18,7 @@ from utils import AgileCommandMode, AgileQuadState
 
 import atexit
 import json
+import re
 import time
 import threading
 from collections import deque
@@ -159,6 +160,7 @@ class AgilePilotNode:
         self.last_saved_state_t = None
         self.data_log_lock = threading.RLock()
         data_log_format = {'timestamp':[],
+                           'rollout_index':[],
                            'desired_vel':[],
                            'env_level':[],
                            'env_folder':[],
@@ -218,6 +220,10 @@ class AgilePilotNode:
         self.env_level = os.environ.get("VITFLY_ENV_LEVEL", "dynamic_astar_medium")
         self.env_folder = os.environ.get("VITFLY_ENV_FOLDER", "environment_0")
         self.env_seed = os.environ.get("VITFLY_ENV_SEED", "")
+        rollout_match = re.fullmatch(
+            r"rollout_(\d+)", os.environ.get("ROLLOUT_NAME", "")
+        )
+        self.rollout_index = int(rollout_match.group(1)) if rollout_match else ""
         self.dynamic_phase_seed = os.environ.get("VITFLY_DYNAMIC_PHASE_SEED", self.env_seed)
         self.dynamic_phase_mode = "seeded_navigation_reset"
         self.initialization_mode = (
@@ -632,6 +638,7 @@ class AgilePilotNode:
         ct_cmd, br_x, br_y, br_z = self.current_low_level_cmd()
         self.data_log.loc[len(self.data_log)] = [
             timestamp,
+            self.rollout_index,
             self.desiredVel,
             self.env_level,
             self.env_folder,

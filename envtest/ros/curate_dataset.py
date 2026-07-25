@@ -58,11 +58,49 @@ def _rollout_key(name):
 
 
 def _latest_trajectory_folders(dataset_dir, count):
-    folders = [path for path in glob.glob(os.path.join(dataset_dir, "*")) if os.path.isdir(path)]
+    folders = [
+        path
+        for path in glob.glob(os.path.join(dataset_dir, "*"))
+        if os.path.isdir(path) and os.path.isfile(os.path.join(path, "data.csv"))
+    ]
     folders.sort(key=os.path.getmtime)
-    if count > len(folders):
-        raise ValueError(f"requested {count} trajectories but only found {len(folders)} under {dataset_dir}")
     return folders[-count:]
+
+
+def _row_rollout_name(rows, full_environment_batch=False):
+    if not rows:
+        return None
+    rollout_index = str(rows[0].get("rollout_index", "")).strip()
+    if rollout_index:
+        try:
+            return f"rollout_{int(float(rollout_index))}"
+        except ValueError:
+            return None
+    if full_environment_batch:
+        match = re.fullmatch(r"environment_(\d+)", rows[0].get("env_folder", ""))
+        if match:
+            return f"rollout_{int(match.group(1)) + 1}"
+    return None
+
+
+def _associate_trajectory_folders(dataset_dir, rollout_names, latest):
+    folders = _latest_trajectory_folders(dataset_dir, latest)
+    full_environment_batch = len(rollout_names) == 101
+    associated = {}
+    unmatched = []
+    for folder in folders:
+        rows = _load_rows(folder)
+        rollout = _row_rollout_name(rows, full_environment_batch=full_environment_batch)
+        if rollout in rollout_names and rollout not in associated:
+            associated[rollout] = (folder, rows)
+        else:
+            unmatched.append((folder, rows))
+
+    remaining = [rollout for rollout in rollout_names if rollout not in associated]
+    if unmatched and len(unmatched) == len(remaining):
+        for rollout, item in zip(remaining, unmatched):
+            associated[rollout] = item
+    return associated
 
 
 def _load_rows(folder):
@@ -115,14 +153,18 @@ def curate_dataset(dataset_dir, evaluation_path, latest=None):
     if latest != len(rollout_names):
         raise ValueError("--latest must equal the number of rollout entries in the evaluation file")
 
-    folders = _latest_trajectory_folders(dataset_dir, latest)
+    associated = _associate_trajectory_folders(dataset_dir, rollout_names, latest)
     records = []
-    for rollout, folder in zip(rollout_names, folders):
-        rows = _load_rows(folder)
+    for rollout in rollout_names:
+        folder, rows = associated.get(rollout, (None, []))
         evaluator = evaluation[rollout] or {}
-        hard_errors, _, _, _ = validate_trajectory(folder, **HARD_VALIDATION_OPTIONS)
-        warning_errors, _, _, _ = validate_trajectory(folder, **WARNING_VALIDATION_OPTIONS)
-        hard_reasons = _strip_folder_prefix(hard_errors, folder)
+        if folder is None:
+            hard_reasons = ["missing data.csv"]
+            warning_errors = []
+        else:
+            hard_errors, _, _, _ = validate_trajectory(folder, **HARD_VALIDATION_OPTIONS)
+            warning_errors, _, _, _ = validate_trajectory(folder, **WARNING_VALIDATION_OPTIONS)
+            hard_reasons = _strip_folder_prefix(hard_errors, folder)
         success = bool(evaluator.get("Success", False))
         crashes = int(evaluator.get("number_crashes", 0))
         if not success:
@@ -130,20 +172,20 @@ def curate_dataset(dataset_dir, evaluation_path, latest=None):
         if crashes != 0:
             hard_reasons.append(f"evaluator number_crashes={crashes}")
 
-        warning_set = set(_strip_folder_prefix(warning_errors, folder))
+        warning_set = set(_strip_folder_prefix(warning_errors, folder)) if folder else set()
         warning_set.difference_update(hard_reasons)
         negative_ratio, backtrack = _path_metrics(rows)
         record = {
             "status": "accepted" if not hard_reasons else "rejected",
             "rollout": rollout,
-            "trajectory_dir": os.path.basename(folder),
+            "trajectory_dir": os.path.basename(folder) if folder else "",
             "env_level": rows[0].get("env_level", "") if rows else "",
             "env_folder": rows[0].get("env_folder", "") if rows else "",
             "env_seed": rows[0].get("env_seed", "") if rows else "",
             "dynamic_phase_seed": rows[0].get("dynamic_phase_seed", "") if rows else "",
             "expert_strategy": rows[0].get("expert_strategy", "astar_dynamic") if rows else "",
             "row_count": len(rows),
-            "png_count": len([path for path in glob.glob(os.path.join(folder, "*.png")) if not path.endswith("_rgb.png")]),
+            "png_count": len([path for path in glob.glob(os.path.join(folder, "*.png")) if not path.endswith("_rgb.png")]) if folder else 0,
             "evaluator_success": int(success),
             "evaluator_crashes": crashes,
             "min_obstacle_margin": _float_metric(rows, "nearest_obstacle_margin", reducer=min),
@@ -177,11 +219,14 @@ def apply_curation(dataset_dir, records):
     accepted = sum(record["status"] == "accepted" for record in records)
     rejected_records = [record for record in records if record["status"] == "rejected"]
     for record in rejected_records:
+        if not record["trajectory_dir"]:
+            continue
         folder = os.path.join(dataset_dir, record["trajectory_dir"])
         if not os.path.isdir(folder):
             raise FileNotFoundError(f"rejected trajectory is missing: {folder}")
     for record in rejected_records:
-        shutil.rmtree(os.path.join(dataset_dir, record["trajectory_dir"]))
+        if record["trajectory_dir"]:
+            shutil.rmtree(os.path.join(dataset_dir, record["trajectory_dir"]))
     summary.update({
         "schema_version": 1,
         "collection_runs": int(summary.get("collection_runs", 0)) + 1,

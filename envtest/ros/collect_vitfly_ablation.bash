@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -u
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKSPACE_DIR="$(cd "$REPO_DIR/../.." && pwd)"
@@ -41,7 +39,10 @@ if [ ! -f "$STATUS_FILE" ]; then
 fi
 
 cd "$WORKSPACE_DIR"
+# Catkin setup scripts reference optional shell variables, so nounset must be
+# enabled only after the ROS environment has been loaded.
 source devel/setup.bash
+set -u
 cd "$REPO_DIR"
 
 while true; do

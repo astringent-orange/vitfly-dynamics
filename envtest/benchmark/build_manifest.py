@@ -167,7 +167,10 @@ def main():
     write_csv(output / "scene_manifest.csv", SCENE_FIELDS, scene_rows)
     write_csv(output / "ablation_validation_cases.csv", CASE_FIELDS, ablation)
     write_csv(output / "comparison_test_cases.csv", CASE_FIELDS, comparison)
-    print(f"[MANIFEST] scenes={len(scene_rows)} ablation_cases={len(ablation)} comparison_cases={len(comparison)}")
+    print(
+        f"[MANIFEST] scenes={len(scene_rows)} ablation_cases={len(ablation)} "
+        f"comparison_cases={len(comparison)}"
+    )
 
 
 if __name__ == "__main__":

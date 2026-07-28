@@ -12,8 +12,13 @@ models/*.pth
 models/*.pt
 models/*.ckpt
 envtest/ros/summary.yaml
+envtest/ros/.summary.yaml.tmp
+envtest/ros/*.log
 evaluation.yaml
 results/
+
+# Generated planner overlays and build products (sources live in third_party/)
+/.planner_workspaces/
 
 # External release archives
 /environments.tar.xz

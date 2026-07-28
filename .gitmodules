@@ -1,0 +1,9 @@
+[submodule "third_party/Fast-Planner"]
+	path = third_party/Fast-Planner
+	url = https://github.com/HKUST-Aerial-Robotics/Fast-Planner.git
+[submodule "third_party/ego-planner"]
+	path = third_party/ego-planner
+	url = https://github.com/ZJU-FAST-Lab/ego-planner.git
+[submodule "third_party/nlopt"]
+	path = third_party/nlopt
+	url = https://github.com/stevengj/nlopt.git

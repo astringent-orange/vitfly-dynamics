@@ -8,20 +8,35 @@ from unittest.mock import patch
 from envtest.benchmark.summarize_results import (
     DEFAULT_TABLE_OUTPUT,
     FACTOR_SPECS,
-    HIGH_SPEED_FACTOR_SPECS,
+    ALL_ABLATION_POLICY_ORDER,
     build_parser as build_summary_parser,
     build_factor_figure,
     latest_policy_result_paths,
     latest_policy_result_rows,
     paired_comparisons,
+    plot_all_ablation_sweeps,
     plot_factor_sweeps,
     read_result_files,
+    scenario_sort_key,
     summarize,
     validate_result_integrity,
 )
 
 
 class SummaryTest(unittest.TestCase):
+    def test_scenario_sort_key_orders_numeric_factor_values(self):
+        scenarios = [
+            "flight_speed_10", "dynamic_speed_5mps", "flight_speed_2",
+            "dynamic_speed_1mps", "flight_speed_8",
+        ]
+        self.assertEqual(
+            sorted(scenarios, key=scenario_sort_key),
+            [
+                "dynamic_speed_1mps", "dynamic_speed_5mps",
+                "flight_speed_2", "flight_speed_8", "flight_speed_10",
+            ],
+        )
+
     def test_summary_defaults_to_latest_policy_results_and_table_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -48,7 +63,7 @@ class SummaryTest(unittest.TestCase):
             expected = {"c1", "c2"}
             for index, policy in enumerate(("single", "adjacent", "skip_one")):
                 old = root / f"{policy}_old" / "results.csv"
-                new = root / f"{policy}_high_speed" / "results.csv"
+                new = root / f"{policy}_new_shard" / "results.csv"
                 old.parent.mkdir()
                 new.parent.mkdir()
                 header = "policy_id,case_id\n"
@@ -137,13 +152,21 @@ class SummaryTest(unittest.TestCase):
         summaries = self.synthetic_summaries()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            plot_factor_sweeps(summaries, output)
+            with patch("matplotlib.figure.Figure.savefig") as savefig:
+                plot_factor_sweeps(summaries, output)
             self.assertEqual(
-                {path.name for path in output.glob("*.png")},
+                {Path(call.args[0]).name for call in savefig.call_args_list},
                 {
                     *[spec["filename"] for spec in FACTOR_SPECS],
+                    *[f"{Path(spec['filename']).stem}.tiff" for spec in FACTOR_SPECS],
                 },
             )
+            tiff_calls = [
+                call for call in savefig.call_args_list
+                if str(call.args[0]).endswith(".tiff")
+            ]
+            self.assertTrue(tiff_calls)
+            self.assertTrue(all(call.kwargs["dpi"] == 600 for call in tiff_calls))
 
         for spec in FACTOR_SPECS:
             figure, axes = build_factor_figure(summaries, spec)
@@ -184,7 +207,7 @@ class SummaryTest(unittest.TestCase):
                 [axis.get_xlabel() for axis in axes],
                 [spec["xaxis_label_zh"]] * 3,
             )
-            self.assertEqual(figure._suptitle.get_text(), spec["title_zh"])
+            self.assertIsNone(figure._suptitle)
             width, height = figure.get_size_inches()
             self.assertGreater(width, height)
             positions = [axis.get_position() for axis in axes]
@@ -200,8 +223,21 @@ class SummaryTest(unittest.TestCase):
         ])
         self.assertEqual(FACTOR_SPECS[0]["x_values"], (1.0, 2.0, 3.0, 4.0, 5.0))
         self.assertEqual(FACTOR_SPECS[1]["x_values"], (2.0, 4.0, 6.0, 8.0, 10.0))
-        self.assertEqual(HIGH_SPEED_FACTOR_SPECS[0]["x_values"], (2.0, 3.0, 4.0, 5.0))
-        self.assertEqual(HIGH_SPEED_FACTOR_SPECS[1]["x_values"], (4.0, 6.0, 8.0, 10.0))
+
+    def test_all_ablation_plots_include_new_policy(self):
+        summaries = self.synthetic_summaries()
+        for row in list(summaries):
+            if row["policy_id"] == "adjacent":
+                copied = dict(row)
+                copied["policy_id"] = "vitfly_adjacent"
+                summaries.append(copied)
+        with patch("envtest.benchmark.summarize_results.plot_factor_sweeps") as plot:
+            plot_all_ablation_sweeps(summaries, Path("unused"))
+        self.assertEqual(plot.call_args.kwargs["policy_order"], ALL_ABLATION_POLICY_ORDER)
+        self.assertEqual(
+            [spec["filename"] for spec in plot.call_args.kwargs["factor_specs"]],
+            ["ablation_dynamic_speed_all.png", "ablation_flight_speed_all.png"],
+        )
 
     def test_missing_successful_time_is_an_empty_plot_point(self):
         try:
@@ -222,7 +258,7 @@ class SummaryTest(unittest.TestCase):
         plt.close(figure)
 
     def complete_integrity_rows(self):
-        expected = {f"c{index}" for index in range(400)}
+        expected = {f"c{index}" for index in range(500)}
         rows = [
             {
                 "policy_id": policy,
@@ -244,7 +280,7 @@ class SummaryTest(unittest.TestCase):
     def test_integrity_rejects_incomplete_and_duplicate_cases(self):
         expected, rows = self.complete_integrity_rows()
         incomplete = [row for row in rows if row["policy_id"] != "single" or int(row["case_id"][1:]) < 21]
-        with self.assertRaisesRegex(ValueError, "21/400"):
+        with self.assertRaisesRegex(ValueError, "21/500"):
             validate_result_integrity(incomplete, expected, ("single", "adjacent", "skip_one"))
         with self.assertRaisesRegex(ValueError, "duplicate result"):
             validate_result_integrity(rows + [dict(rows[0])], expected, ("single", "adjacent", "skip_one"))

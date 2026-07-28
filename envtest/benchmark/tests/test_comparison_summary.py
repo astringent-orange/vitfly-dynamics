@@ -59,7 +59,7 @@ class ComparisonSummaryTest(unittest.TestCase):
         self.assertIsNone(args.results)
         self.assertEqual(args.output, DEFAULT_TABLE_OUTPUT)
 
-    def test_three_comparison_figures_contain_four_model_curves(self):
+    def test_two_comparison_figures_contain_five_points_for_four_models(self):
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -93,6 +93,7 @@ class ComparisonSummaryTest(unittest.TestCase):
                 self.assertEqual(len(axes[0].get_legend_handles_labels()[1]), 4)
                 self.assertEqual(len(axes[1].lines), 4)
                 self.assertEqual(len(axes[2].lines), 4)
+                self.assertTrue(all(len(line.get_xdata()) == 5 for axis in axes for line in axis.lines))
                 self.assertEqual(
                     [line.get_marker() for line in axes[0].lines],
                     ["s", "D", "P", "X"],

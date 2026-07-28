@@ -4,7 +4,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MAIN_WS="${VITFLY_MAIN_WORKSPACE:-$(cd "$REPO_ROOT/../.." && pwd)}"
-PLANNER_WS="${VITFLY_FASTPLANNER_WORKSPACE:-$(cd "$MAIN_WS/../fastplanner_ws" 2>/dev/null && pwd)}"
+PLANNER_WS="${VITFLY_FASTPLANNER_WORKSPACE:-$REPO_ROOT/../../../.planner_workspaces/fastplanner}"
 PYTHON_BIN="${VITFLY_PYTHON:-python3}"
 PLANNER_PID=""
 BRIDGE_PID=""

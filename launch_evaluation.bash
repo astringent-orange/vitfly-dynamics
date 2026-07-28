@@ -222,6 +222,10 @@ then
     rviz_enabled=True
   else
     run_competition_args=""
+    if [ "$state_expert" = "vitfly_original" ] && [ -z "$real_time_factor" ]
+    then
+      real_time_factor="2.0"
+    fi
     if [ -n "$real_time_factor" ]
     then
       realtimefactor="real_time_factor:=$real_time_factor"

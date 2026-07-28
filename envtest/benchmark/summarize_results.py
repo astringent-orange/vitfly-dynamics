@@ -7,6 +7,7 @@ import json
 import math
 import random
 import statistics
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,12 @@ PAIRED_FIELDS = [
     "successful_time_difference_mean",
 ]
 POLICY_ORDER = ("single", "adjacent", "skip_one")
+ALL_ABLATION_POLICY_ORDER = (
+    *POLICY_ORDER,
+    "vitfly_single",
+    "vitfly_adjacent",
+    "vitfly_skip_one",
+)
 FACTOR_SPECS = (
     {
         "filename": "ablation_dynamic_speed.png",
@@ -53,35 +60,26 @@ FACTOR_SPECS = (
         "scenarios": ("flight_speed_2", "flight_speed_4", "flight_speed_6", "flight_speed_8", "flight_speed_10"),
     },
 )
-HIGH_SPEED_FACTOR_SPECS = (
-    {
-        **FACTOR_SPECS[0],
-        "filename": "ablation_dynamic_speed_high_speed.png",
-        "tick_labels_zh": ("2", "3", "4", "5"),
-        "x_values": (2.0, 3.0, 4.0, 5.0),
-        "tick_labels": ("2", "3", "4", "5"),
-        "scenarios": ("dynamic_speed_2mps", "dynamic_speed_3mps", "dynamic_speed_4mps", "dynamic_speed_5mps"),
-    },
-    {
-        **FACTOR_SPECS[1],
-        "filename": "ablation_flight_speed_high_speed.png",
-        "tick_labels_zh": ("4", "6", "8", "10"),
-        "x_values": (4.0, 6.0, 8.0, 10.0),
-        "tick_labels": ("4", "6", "8", "10"),
-        "scenarios": ("flight_speed_4", "flight_speed_6", "flight_speed_8", "flight_speed_10"),
-    },
-)
 LEGACY_PLOT_FILENAMES = (
     "success_rate_by_scenario.png",
     "collision_rate_by_scenario.png",
     "flight_time_by_scenario.png",
     "ablation_forest_density.png",
     "comparison_forest_density.png",
+    "ablation_dynamic_speed_high_speed.png",
+    "ablation_dynamic_speed_high_speed.tiff",
+    "ablation_dynamic_speed_high_speed.eps",
+    "ablation_flight_speed_high_speed.png",
+    "ablation_flight_speed_high_speed.tiff",
+    "ablation_flight_speed_high_speed.eps",
 )
 POLICY_DISPLAY_NAMES_ZH = {
     "single": "单帧",
     "adjacent": "相邻双帧",
     "skip_one": "隔帧双帧",
+    "vitfly_single": "ViTFly专家数据-单帧",
+    "vitfly_adjacent": "ViTFly专家数据-相邻双帧",
+    "vitfly_skip_one": "ViTFly专家数据-隔帧双帧",
     "best_ours": "本文模型",
     "vitfly": "ViTFly",
     "fastplanner": "FastPlanner",
@@ -93,6 +91,9 @@ POLICY_COLORS = {
     "vitfly": "#9467bd",
     "adjacent": "#ff7f0e",
     "skip_one": "#2ca02c",
+    "vitfly_single": "#9467bd",
+    "vitfly_adjacent": "#7f7f7f",
+    "vitfly_skip_one": "#8c564b",
     "fastplanner": "#8c564b",
     "egoplanner": "#1f4e79",
 }
@@ -100,6 +101,9 @@ POLICY_MARKERS = {
     "single": "o",
     "adjacent": "s",
     "skip_one": "^",
+    "vitfly_single": "P",
+    "vitfly_adjacent": "D",
+    "vitfly_skip_one": "X",
     # The selected proposed model keeps the adjacent-frame marker in the
     # formal comparison plots.
     "best_ours": "s",
@@ -109,9 +113,19 @@ POLICY_MARKERS = {
 }
 PLOT_TEXT_SIZE = 16
 PLOT_TICK_SIZE = 14
+TIMES_NEW_ROMAN_PATHS = (
+    Path.home() / ".local/share/fonts/windows-fonts/times.ttf",
+    Path.home() / "snap/code/253/.local/share/fonts/windows-fonts/times.ttf",
+    Path.home() / "下载/times.ttf",
+)
 CHINESE_FONT_PATHS = (
-    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-    Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
+    Path.home() / ".local/share/fonts/windows-fonts/simsun.ttc",
+    Path.home() / ".local/share/fonts/windows-fonts/simsun.ttf",
+    Path.home() / "下载/simsun.ttc",
+    Path.home() / "下载/simsun.ttf",
+    # Serif CJK is the closest available Song-style fallback when a complete
+    # SimSun font is not installed. SimSun-ExtB/ExtG lack common Chinese glyphs.
+    Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
 )
 
 
@@ -208,13 +222,7 @@ def latest_policy_result_paths(root=ABLATION_RESULTS_ROOT):
 
 
 def latest_policy_result_rows(root, policy_order, expected_case_ids):
-    """Merge the newest complementary result shards for each policy.
-
-    Ablation runs may keep the original 400-case result and add a separate
-    100-case high-speed result.  Newer rows win for the same case, while
-    older rows are retained only when they cover a case absent from newer
-    shards.  Integrity validation remains the final authority.
-    """
+    """Merge complementary result shards, preferring newer rows per case."""
     expected = set(expected_case_ids)
     merged = []
     sources = []
@@ -276,12 +284,31 @@ def as_int(value):
     return int(float(value))
 
 
+def scenario_sort_key(scenario):
+    """Sort numbered benchmark scenarios numerically, not lexically."""
+    prefixes = ("dynamic_speed_", "flight_speed_")
+    for factor_order, prefix in enumerate(prefixes):
+        if scenario.startswith(prefix):
+            suffix = scenario[len(prefix):]
+            if suffix.endswith("mps"):
+                suffix = suffix[:-3]
+            try:
+                return factor_order, float(suffix)
+            except ValueError:
+                break
+    return len(prefixes), scenario
+
+
 def summarize(rows):
     groups = {}
     for row in rows:
         groups.setdefault((row["policy_id"], row["scenario_id"]), []).append(row)
     summaries = []
-    for (policy, scenario), group in sorted(groups.items()):
+    ordered_groups = sorted(
+        groups.items(),
+        key=lambda item: (item[0][0], scenario_sort_key(item[0][1])),
+    )
+    for (policy, scenario), group in ordered_groups:
         successes = [as_int(row.get("success", 0)) for row in group]
         collisions = [as_int(row.get("collision", 0)) for row in group]
         times = [float(row["flight_time"]) for row in group if row.get("success") == "1" and row.get("flight_time") not in ("", None)]
@@ -380,21 +407,29 @@ def ordered_policies(summaries, policy_order=POLICY_ORDER):
     return [policy for policy in policy_order if policy in present]
 
 
-def chinese_font_properties():
-    """Load a Chinese-capable font without relying on Matplotlib's font cache."""
+def plot_font_properties():
+    """Load explicit Song-style Chinese and Times New Roman plot fonts."""
     from matplotlib.font_manager import FontProperties
 
-    font_path = next((path for path in CHINESE_FONT_PATHS if path.exists()), None)
-    return FontProperties(fname=str(font_path)) if font_path else FontProperties()
+    chinese_path = next((path for path in CHINESE_FONT_PATHS if path.exists()), None)
+    western_path = next((path for path in TIMES_NEW_ROMAN_PATHS if path.exists()), None)
+    chinese = FontProperties(fname=str(chinese_path)) if chinese_path else FontProperties(
+        family="serif"
+    )
+    western = FontProperties(fname=str(western_path)) if western_path else FontProperties(
+        family="Times New Roman"
+    )
+    return chinese, western
 
 
-def apply_font_properties(text_items, font_properties):
-    """Apply a font file while preserving each text object's existing style."""
+def apply_font_properties(text_items, chinese_font, western_font):
+    """Use Song style for Chinese text and Times New Roman for western text."""
     for text_item in text_items:
         font_size = text_item.get_fontsize()
         font_weight = text_item.get_fontweight()
         font_style = text_item.get_fontstyle()
-        text_item.set_fontproperties(font_properties)
+        contains_chinese = bool(re.search(r"[\u3400-\u9fff]", text_item.get_text()))
+        text_item.set_fontproperties(chinese_font if contains_chinese else western_font)
         text_item.set_fontsize(font_size)
         text_item.set_fontweight(font_weight)
         text_item.set_fontstyle(font_style)
@@ -451,7 +486,7 @@ def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
     from matplotlib.ticker import FormatStrFormatter, MaxNLocator, MultipleLocator
 
     x_values = list(spec["x_values"])
-    chinese_font = chinese_font_properties()
+    chinese_font, western_font = plot_font_properties()
     fig, axes = plt.subplots(1, 3, figsize=(16, 5.6), sharex=True)
     success_axis_values = []
     collision_axis_values = []
@@ -505,32 +540,27 @@ def build_factor_figure(summaries, spec, policy_order=POLICY_ORDER):
         axis.set_ylabel(yaxis_label, fontsize=PLOT_TEXT_SIZE, labelpad=8)
         axis.tick_params(axis="both", labelsize=PLOT_TICK_SIZE)
         axis.grid(True, alpha=0.3)
-    fig.suptitle(
-        spec.get("title_zh", spec["xlabel_zh"]),
-        y=0.97,
-        fontsize=PLOT_TEXT_SIZE,
-        fontweight="semibold",
-    )
     handles, labels = axes[0].get_legend_handles_labels()
+    legend_columns = 3 if len(labels) > 4 else len(labels)
     fig.legend(
         handles,
         labels,
         loc="lower center",
-        ncol=len(labels),
-        bbox_to_anchor=(0.5, 0.045),
+        ncol=legend_columns,
+        bbox_to_anchor=(0.5, 0.025 if len(labels) > 4 else 0.045),
         fontsize=PLOT_TEXT_SIZE,
         markerscale=1.25,
         handlelength=2.3,
     )
     apply_font_properties([
-        fig._suptitle,
         *[axis.xaxis.label for axis in axes],
         *[axis.yaxis.label for axis in axes],
         *[text for axis in axes for text in axis.get_xticklabels()],
         *[text for axis in axes for text in axis.get_yticklabels()],
         *fig.legends[0].get_texts(),
-    ], chinese_font)
-    fig.tight_layout(rect=(0.0, 0.14, 1.0, 0.92), w_pad=1.8)
+    ], chinese_font, western_font)
+    bottom_margin = 0.22 if len(labels) > 4 else 0.14
+    fig.tight_layout(rect=(0.0, bottom_margin, 1.0, 0.99), w_pad=1.8)
     return fig, axes
 
 
@@ -551,7 +581,9 @@ def plot_factor_sweeps(
     for filename in legacy_plot_filenames:
         (output / filename).unlink(missing_ok=True)
     for spec in factor_specs:
-        (output / spec["filename"]).unlink(missing_ok=True)
+        stem = Path(spec["filename"]).stem
+        for suffix in (".png", ".tiff", ".eps"):
+            (output / f"{stem}{suffix}").unlink(missing_ok=True)
     present = {row["policy_id"] for row in summaries}
     if not set(policy_order).issubset(present):
         missing = ", ".join(policy for policy in policy_order if policy not in present)
@@ -559,8 +591,24 @@ def plot_factor_sweeps(
         return
     for spec in factor_specs:
         fig, _axes = build_factor_figure(summaries, spec, policy_order)
-        fig.savefig(output / spec["filename"], dpi=160)
+        stem = Path(spec["filename"]).stem
+        fig.savefig(output / f"{stem}.png", dpi=160)
+        fig.savefig(output / f"{stem}.tiff", dpi=600)
         plt.close(fig)
+
+
+def plot_all_ablation_sweeps(summaries, output):
+    all_specs = tuple(
+        {**spec, "filename": f"{Path(spec['filename']).stem}_all.png"}
+        for spec in FACTOR_SPECS
+    )
+    plot_factor_sweeps(
+        summaries,
+        output,
+        policy_order=ALL_ABLATION_POLICY_ORDER,
+        factor_specs=all_specs,
+        legacy_plot_filenames=(),
+    )
 
 
 def write_summary_outputs(
@@ -592,12 +640,7 @@ def write_summary_outputs(
         factor_specs=factor_specs,
     )
     if factor_specs is FACTOR_SPECS:
-        plot_factor_sweeps(
-            summaries,
-            output,
-            policy_order=policy_order,
-            factor_specs=HIGH_SPEED_FACTOR_SPECS,
-        )
+        plot_all_ablation_sweeps(summaries, output)
     return summaries, paired
 
 
@@ -605,6 +648,10 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", action="append", help="Result CSV; repeat to merge multiple policies")
     parser.add_argument("--output", default=DEFAULT_TABLE_OUTPUT)
+    parser.add_argument(
+        "--summary-only",
+        help="Read an existing summary CSV and regenerate plots without modifying it",
+    )
     return parser
 
 
@@ -612,6 +659,13 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     output = Path(args.output)
+    if args.summary_only:
+        summaries = read_csv(args.summary_only)
+        output.mkdir(parents=True, exist_ok=True)
+        plot_factor_sweeps(summaries, output)
+        plot_all_ablation_sweeps(summaries, output)
+        print(f"[SUMMARY] regenerated plots from {args.summary_only}; summary unchanged")
+        return
     expected_case_ids = [row["case_id"] for row in read_csv(DEFAULT_CASES)]
     try:
         if args.results:

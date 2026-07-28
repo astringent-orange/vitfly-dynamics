@@ -1,4 +1,4 @@
-experiment_id: forest_benchmark_v1
+experiment_id: forest_benchmark_vitfly_data_v1
 
 execution:
   # Benchmark runs use simulated time at 1.5x wall-clock speed and reuse one
@@ -11,17 +11,17 @@ output_level: forest_benchmark_v1
 scene_seed: 20260716
 
 policies:
-  - id: single
+  - id: vitfly_data_single
     adapter: vitfly_neural
-    checkpoint: models/current_frame/current_frame_vitlstm_000099.pth
+    checkpoint: models/current_frame_vitfly/current_frame_vitlstm_000099.pth
     frame_offset: 0
-  - id: adjacent
+  - id: vitfly_data_adjacent
     adapter: vitfly_neural
-    checkpoint: models/previous_frame/previous_frame_vitlstm_000099.pth
+    checkpoint: models/previous_frame_vitfly/previous_frame_vitlstm_000099.pth
     frame_offset: 1
-  - id: skip_one
+  - id: vitfly_data_skip_one
     adapter: vitfly_neural
-    checkpoint: models/second_previous_frame/second_previous_frame_vitlstm_000099.pth
+    checkpoint: models/second_previous_frame_vitfly/second_previous_frame_vitlstm_000099.pth
     frame_offset: 2
   - id: original_vitfly
     adapter: vitfly_legacy
@@ -125,7 +125,7 @@ design:
   comparison_models:
     best:
       result_id: best_ours
-      candidates: [single, adjacent, skip_one]
+      candidates: [vitfly_data_single, vitfly_data_adjacent, vitfly_data_skip_one]
     vitfly:
       result_id: vitfly
       source_policy: original_vitfly

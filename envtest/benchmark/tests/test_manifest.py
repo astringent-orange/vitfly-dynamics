@@ -21,7 +21,7 @@ class ManifestTest(unittest.TestCase):
         "flight_speed_8",
         "flight_speed_10",
     }
-    COMPARISON_SCENARIOS = ABLATION_SCENARIOS - {"dynamic_speed_5mps", "flight_speed_10"}
+    COMPARISON_SCENARIOS = ABLATION_SCENARIOS
 
     def read(self, name):
         with open(MANIFEST / name, newline="") as stream:
@@ -29,7 +29,7 @@ class ManifestTest(unittest.TestCase):
 
     def test_expected_case_counts(self):
         self.assertEqual(len(self.read("ablation_validation_cases.csv")), 500)
-        self.assertEqual(len(self.read("comparison_test_cases.csv")), 400)
+        self.assertEqual(len(self.read("comparison_test_cases.csv")), 500)
 
     def test_each_split_uses_five_phase_seeds(self):
         self.assertEqual({row["phase_seed"] for row in self.read("ablation_validation_cases.csv")},

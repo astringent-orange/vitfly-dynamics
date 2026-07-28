@@ -33,6 +33,19 @@ def git_head(path):
         return ""
 
 
+def patch_applied(source_dir, patch_path):
+    """Return whether a generated worktree contains the recorded patch."""
+    try:
+        return subprocess.run(
+            [
+                "git", "-C", str(source_dir), "apply", "--reverse", "--check",
+                "--unidiff-zero", "--recount", str(patch_path),
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    except OSError:
+        return False
+
+
 def audit(config_path, cases_path, requested):
     cfg = load(config_path)
     policies = policy_index(cfg.get("policies", []))
@@ -69,17 +82,29 @@ def audit(config_path, cases_path, requested):
             row["expected_commit"] = EXPECTED_COMMITS[adapter]
             row["configured_commit"] = policy.get("upstream_commit", "")
             row["configured_commit_matches"] = row["configured_commit"] == row["expected_commit"]
-            main_workspace = ROOT.parents[1]
-            default_workspace = main_workspace.parent / ("fastplanner_ws" if is_fast else "egoplanner_ws")
+            submodule = ROOT / "third_party" / ("Fast-Planner" if is_fast else "ego-planner")
+            row["submodule_path"] = str(submodule)
+            row["submodule_commit"] = git_head(submodule)
+            row["submodule_initialized"] = bool(row["submodule_commit"])
+            row["submodule_commit_matches"] = row["submodule_commit"] == row["expected_commit"]
+            default_workspace = ROOT.parents[1].parent / ".planner_workspaces" / (
+                "fastplanner" if is_fast else "egoplanner"
+            )
             workspace = Path(os.environ.get(workspace_var, str(default_workspace)))
             source_dir = workspace / "src" / ("Fast-Planner" if is_fast else "ego-planner")
             row["workspace"] = str(workspace)
             row["source_commit"] = git_head(source_dir)
             row["commit_matches"] = row["source_commit"] == row["expected_commit"]
             row["devel_setup_exists"] = (workspace / "devel" / "setup.bash").is_file()
+            row["patches_applied"] = all(
+                patch_applied(source_dir, item["path"])
+                for item in patch_paths
+            )
             row["ok"] = (
                 row["ok"] and row["configured_commit_matches"] and
-                row["commit_matches"] and row["devel_setup_exists"]
+                row["submodule_initialized"] and row["submodule_commit_matches"] and
+                row["commit_matches"] and row["devel_setup_exists"] and
+                row["patches_applied"]
             )
         checks.append(row)
 
